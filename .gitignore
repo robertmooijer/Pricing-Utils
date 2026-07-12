@@ -1,0 +1,9 @@
+# R session artefacts
+.Rhistory
+.RData
+.Rproj.user/
+
+# Generated demo output — recreate with: Rscript demo/run_demo.R
+demo/*.html
+demo/*_files/
+demo/*.xlsx
