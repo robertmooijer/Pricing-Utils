@@ -22,8 +22,7 @@
 #   Rscript demo/run_demo.R
 # ─────────────────────────────────────────────────────────────────────
 
-library(pricingtoolsRmO)
-library(splines)   # for ns() in the model formulas
+library(pricingtoolsRmO)   # ns()/bs() are re-exported by the package
 
 set.seed(2026)
 n <- 100000

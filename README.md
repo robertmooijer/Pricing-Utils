@@ -57,14 +57,13 @@ Install from GitHub and attach the package:
 remotes::install_github("robertmooijer/Pricing-Utils")
 
 library(pricingtoolsRmO)
-library(splines)   # for ns()/bs() in your model formulas
 ```
 
 This exports the functions listed above plus the house-style colour
 constants (`ta_navy`, `ta_blue`, `ta_lightblue`, `ta_gold`, `ta_muted`,
-and the palette helper `ta_year_palette(n)`). Note that the package does
-not attach `splines` for you: if your formulas use `ns()`/`bs()`, load it
-in your own session as shown.
+and the palette helper `ta_year_palette(n)`). The spline basis functions
+`ns()` and `bs()` are re-exported from the `splines` package, so formulas
+like `y ~ ns(AGE, 4)` work without loading `splines` yourself.
 
 ## Data conventions
 
@@ -117,7 +116,6 @@ Two things matter throughout:
 
 ```r
 library(pricingtoolsRmO)
-library(splines)
 
 # --- Fit models -------------------------------------------------------
 m_freq <- glm(AantalClaims ~ ns(AGE, 4) + REGION + factor(BOEKJAAR) +

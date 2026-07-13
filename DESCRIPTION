@@ -27,11 +27,11 @@ Imports:
     magrittr,
     plotly,
     rlang,
+    splines,
     stats,
     utils
 Suggests:
     htmltools,
     openxlsx,
-    splines,
     testthat (>= 3.0.0)
 Config/testthat/edition: 3

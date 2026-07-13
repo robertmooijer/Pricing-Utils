@@ -1,5 +1,6 @@
-# Shared simulated portfolio and fitted models for all tests
-library(splines)
+# Shared simulated portfolio and fitted models for all tests.
+# Note: no library(splines) here on purpose - ns() must be available
+# through the package re-export.
 
 set.seed(42)
 n <- 20000
