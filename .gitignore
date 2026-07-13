@@ -3,6 +3,10 @@
 .RData
 .Rproj.user/
 
+# Build/check artefacts
+*.tar.gz
+pricingtoolsRmO.Rcheck/
+
 # Generated demo output — recreate with: Rscript demo/run_demo.R
 demo/*.html
 demo/*_files/

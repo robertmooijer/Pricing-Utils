@@ -1,0 +1,37 @@
+Package: pricingtoolsRmO
+Title: GLM Pricing Tools for Non-Life Insurance
+Version: 0.1.0
+Authors@R:
+    person("Robert", "Mooijer", email = "robertmooyer@live.nl",
+           role = c("aut", "cre"))
+Description: Tools for GLM-based non-life insurance pricing built around a
+    frequency/severity model pair: one-way exploration, actual-vs-expected
+    checks, partial dependence plots computed on the response scale with
+    offset neutralisation, multiplicative rating tables with credibility
+    flags and interaction uplifts, model diagnostics (dispersion, binned
+    residuals), premium dislocation analysis, a formatted 'Excel' export
+    and a one-call HTML report. All plots are interactive 'plotly' widgets.
+License: MIT + file LICENSE
+URL: https://github.com/robertmooijer/Pricing-Utils
+BugReports: https://github.com/robertmooijer/Pricing-Utils/issues
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.1
+Depends:
+    R (>= 4.1)
+Imports:
+    data.table,
+    dplyr,
+    ggplot2,
+    grDevices,
+    magrittr,
+    plotly,
+    rlang,
+    stats,
+    utils
+Suggests:
+    htmltools,
+    openxlsx,
+    splines,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3

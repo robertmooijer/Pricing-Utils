@@ -1,0 +1,8 @@
+^\.github$
+^LICENSE\.md$
+^demo$
+^glm_pricing_motorportefeuille\.md$
+^GLM UTILS\.R$
+^test_glm_utils\.R$
+^.*\.Rproj$
+^\.Rproj\.user$

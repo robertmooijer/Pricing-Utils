@@ -17,10 +17,13 @@
 #   * The "current" tariff only differentiates by REGIO: the premium
 #     impact shows how the new model redistributes premium.
 #
-# Run from the project root:  Rscript demo/run_demo.R
+# Install the package once, then run from the project root:
+#   remotes::install_github("robertmooijer/Pricing-Utils")
+#   Rscript demo/run_demo.R
 # ─────────────────────────────────────────────────────────────────────
 
-source("GLM UTILS.R")
+library(pricingtoolsRmO)
+library(splines)   # for ns() in the model formulas
 
 set.seed(2026)
 n <- 100000

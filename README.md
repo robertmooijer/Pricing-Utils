@@ -1,6 +1,8 @@
-# GLM Utils
+# pricingtoolsRmO
 
-An R toolkit for **GLM-based non-life insurance pricing analysis**. It covers the
+[![R-CMD-check](https://github.com/robertmooijer/Pricing-Utils/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/robertmooijer/Pricing-Utils/actions/workflows/R-CMD-check.yaml)
+
+An R package for **GLM-based non-life insurance pricing analysis**. It covers the
 standard workflow around a frequency/severity model pair: one-way exploration,
 actual-vs-expected checks, partial dependence plots, model diagnostics
 (dispersion, binned residuals), the construction of a multiplicative
@@ -40,25 +42,29 @@ on a secondary axis, horizontal legends) and export to PNG via the plotly mode b
 
 ## Requirements
 
-- R (developed and tested on R 4.2.1)
-- Packages: `dplyr`, `ggplot2`, `plotly`, `data.table`, `splines` (base R)
+- R >= 4.1 (developed and tested on R 4.2.1)
+- Hard dependencies (installed automatically): `dplyr`, `ggplot2`, `plotly`,
+  `data.table`
 - Optional: `openxlsx` (only for `export_rating_table()`); `htmltools`
   (only for `pricing_report()`, installed automatically with plotly)
 
-`splines` is attached by the utils file itself so that `predict()` works on
-models that use `ns()`/`bs()` in their formula.
-
 ## Getting started
 
-There is no package; simply source the file:
+Install from GitHub and attach the package:
 
 ```r
-source("GLM UTILS.R")
+# install.packages("remotes")
+remotes::install_github("robertmooijer/Pricing-Utils")
+
+library(pricingtoolsRmO)
+library(splines)   # for ns()/bs() in your model formulas
 ```
 
-This attaches the required libraries and defines six functions plus the
-house-style colour constants (`ta_navy`, `ta_blue`, `ta_lightblue`, `ta_gold`,
-`ta_muted`, and the palette helper `ta_year_palette(n)`).
+This exports the functions listed above plus the house-style colour
+constants (`ta_navy`, `ta_blue`, `ta_lightblue`, `ta_gold`, `ta_muted`,
+and the palette helper `ta_year_palette(n)`). Note that the package does
+not attach `splines` for you: if your formulas use `ns()`/`bs()`, load it
+in your own session as shown.
 
 ## Data conventions
 
@@ -110,7 +116,8 @@ Two things matter throughout:
 ## Quick start example
 
 ```r
-source("GLM UTILS.R")
+library(pricingtoolsRmO)
+library(splines)
 
 # --- Fit models -------------------------------------------------------
 m_freq <- glm(AantalClaims ~ ns(AGE, 4) + REGION + factor(BOEKJAAR) +
@@ -585,9 +592,9 @@ wrong numbers:
 
 ## Tests
 
-`test_glm_utils.R` contains an executable validation suite (51 checks) that
-simulates a portfolio, fits Poisson/Gamma models and verifies among other
-things: exact premium reconstruction from the table, factor = 1 on base rows,
+The package ships with a `testthat` suite (`tests/testthat/`) that simulates
+a portfolio, fits Poisson/Gamma models and verifies among other things:
+exact premium reconstruction from the table, factor = 1 on base rows,
 uplift = 1 at reference levels, PDP = exposure-weighted mean response at
 exposure 1, offset-neutralised intercepts, inline `factor()` handling, custom
 column names, the non-log-link warning, the overdispersion warning, binned
@@ -596,11 +603,13 @@ credibility/thin-cell columns, zero dislocation for identical models and
 exact rebase behaviour in `premium_impact()`, the Excel workbook structure,
 and the generated HTML report. Run it with:
 
-```sh
-Rscript test_glm_utils.R
+```r
+devtools::test()        # or:
+devtools::check()       # full R CMD check, as run in CI on every push
 ```
 
-All checks should print `[OK ]`.
+The GitHub Actions workflow (`R-CMD-check`) runs the full check on every
+push to `main`.
 
 ## Known limitations
 
