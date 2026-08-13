@@ -11,7 +11,7 @@
 #
 # Built-in demo talking points:
 #   * BRANDSTOF = "Waterstof" is deliberately rare (~10-15 claims):
-#     shows the IsThin/Credibility flags and the dimmed markers.
+#     shows the IsThin flag and the dimmed markers.
 #   * A true LEEFTIJD × REGIO interaction (young drivers worse in the
 #     Randstad): shows the interaction plot and the Uplift columns.
 #   * The "current" tariff only differentiates by REGIO: the premium
@@ -91,7 +91,7 @@ tbl <- make_rating_table(m_freq, m_sev, data = dat,
 cat("Base premium per exposure unit:",
     round(attr(tbl, "intercept_premium"), 2), "\n")
 thin <- tbl[tbl$IsThin %in% TRUE & is.na(tbl$Group) & tbl$Type == "categorical",
-            c("Variable", "Level", "ClaimCount", "Credibility")]
+            c("Variable", "Level", "Exposure", "ClaimCount")]
 cat("Thin categorical levels (IsThin):\n"); print(thin, row.names = FALSE)
 cat("\n")
 

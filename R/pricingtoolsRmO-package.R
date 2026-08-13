@@ -31,7 +31,6 @@ utils::globalVariables(c(
   "Level", "Group", "IsBase", "IsThin",
   "Factor_Frequency", "Factor_Severity", "Factor_Premium",
   "Uplift_Frequency", "Uplift_Severity", "Uplift_Premium",
-  "Credibility_Frequency", "Credibility_Severity", "Credibility_Premium",
   "bin", "bin_group", "x", "r", "x_var", "x_plot",
   "observed", "predicted", "weight", "weight_sum",
   "avg_observed", "avg_predicted", "mean_r", "band",

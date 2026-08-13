@@ -7,7 +7,7 @@ Authors@R:
 Description: Tools for GLM-based non-life insurance pricing built around a
     frequency/severity model pair: one-way exploration, actual-vs-expected
     checks, partial dependence plots computed on the response scale with
-    offset neutralisation, multiplicative rating tables with credibility
+    offset neutralisation, multiplicative rating tables with thin-cell
     flags and interaction uplifts, model diagnostics (dispersion, binned
     residuals), premium dislocation analysis, a formatted 'Excel' export
     and a one-call HTML report. All plots are interactive 'plotly' widgets.

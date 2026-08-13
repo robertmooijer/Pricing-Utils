@@ -36,11 +36,11 @@ snap <- function(p, name, width = 900, height = 460) {
 
 # Render a data.frame excerpt as a styled table image, mirroring the
 # highlighting used by export_rating_table(): base row in light blue,
-# thin (low-credibility) rows greyed out and italic.
+# thin rows (few claims) greyed out and italic.
 snap_table <- function(df, name, digits = 3, vwidth = 1800) {
   h <- htmltools::tags
   # Format per column type, as export_rating_table() does: counts with a
-  # thousands separator and no decimals, factors/credibility with decimals.
+  # thousands separator and no decimals, factors with decimals.
   fm <- function(x, nm) {
     if (is.logical(x)) return(ifelse(x, "TRUE", "FALSE"))
     if (!is.numeric(x)) return(as.character(x))
@@ -154,13 +154,9 @@ snap(make_rating_plot(tbl, "BRANDSTOF"), "rating-plot-categorical",
 # The rating table itself, styled like the Excel export
 snap_table(
   tbl[tbl$Variable == "BRANDSTOF" & is.na(tbl$Group),
-      c("Level", "IsBase", "Exposure", "ClaimCount",
-        "Credibility_Frequency", "Credibility_Severity", "IsThin",
+      c("Level", "IsBase", "Exposure", "ClaimCount", "IsThin",
         "Factor_Frequency", "Factor_Severity", "Factor_Premium")],
   "rating-table")
-
-cat("\nCredibility standards used:\n")
-str(attr(tbl, "credibility"))
 
 # The interaction row is named after R's own term ordering (which may
 # differ from the order you typed), so look it up in the table.

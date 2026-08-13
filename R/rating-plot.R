@@ -37,7 +37,7 @@ make_rating_plot <- function(rating_tbl, var, metric_fmt = 4, metric = NULL,
     mode_line <- if (is_cat) "markers" else "lines+markers"
 
     # Thin cells (IsThin from make_rating_table): dim the markers and add
-    # a hover note, so low-credibility levels are visually distinct
+    # a hover note, so levels backed by few claims stand out visually
     thin <- if ("IsThin" %in% names(d)) d$IsThin %in% TRUE else rep(FALSE, nrow(d))
     d$.thin_label <- ifelse(thin, "<br><i>\u26a0 low claim volume</i>", "")
     op <- ifelse(thin, 0.4, 1)

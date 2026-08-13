@@ -62,7 +62,7 @@ export_rating_table <- function(rating_tbl, file = "rating_table.xlsx",
         openxlsx::addStyle(wb, sn, st_thin, rows = thin_rows,
                            cols = seq_len(nc), gridExpand = TRUE, stack = TRUE)
     }
-    fac_cols <- grep("^(Factor|Uplift|Credibility)", names(d))
+    fac_cols <- grep("^(Factor|Uplift)", names(d))
     if (length(fac_cols))
       openxlsx::addStyle(wb, sn, st_fac, rows = seq_len(nrow(d)) + 1,
                          cols = fac_cols, gridExpand = TRUE, stack = TRUE)
@@ -101,9 +101,7 @@ export_rating_table <- function(rating_tbl, file = "rating_table.xlsx",
 
   # Main-effect sheets ----------------------------------------------------------
   keep_main <- intersect(c("Level", "IsBase", "Exposure", "ClaimCount",
-                           "Credibility_Frequency", "Credibility_Severity",
-                           "Credibility_Premium", "IsThin",
-                           "Factor_Frequency", "Factor_Severity",
+                           "IsThin", "Factor_Frequency", "Factor_Severity",
                            "Factor_Premium"),
                          names(rating_tbl))
   for (v in unique(rating_tbl$Variable[is.na(rating_tbl$Group)])) {

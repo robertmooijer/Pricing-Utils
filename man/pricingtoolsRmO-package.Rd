@@ -6,7 +6,7 @@
 \alias{pricingtoolsRmO-package}
 \title{pricingtoolsRmO: GLM Pricing Tools for Non-Life Insurance}
 \description{
-Tools for GLM-based non-life insurance pricing built around a frequency/severity model pair: one-way exploration, actual-vs-expected checks, partial dependence plots computed on the response scale with offset neutralisation, multiplicative rating tables with credibility flags and interaction uplifts, model diagnostics (dispersion, binned residuals), premium dislocation analysis, a formatted 'Excel' export and a one-call HTML report. All plots are interactive 'plotly' widgets.
+Tools for GLM-based non-life insurance pricing built around a frequency/severity model pair: one-way exploration, actual-vs-expected checks, partial dependence plots computed on the response scale with offset neutralisation, multiplicative rating tables with thin-cell flags and interaction uplifts, model diagnostics (dispersion, binned residuals), premium dislocation analysis, a formatted 'Excel' export and a one-call HTML report. All plots are interactive 'plotly' widgets.
 }
 \seealso{
 Useful links:

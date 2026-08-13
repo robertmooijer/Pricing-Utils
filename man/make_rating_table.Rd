@@ -13,9 +13,7 @@ make_rating_table(
   claims_col = "AantalClaims",
   base_level = c("first", "exposure"),
   trim = c(0, 1),
-  min_claims = 30,
-  full_cred_claims = 1082,
-  cv_severity = NULL
+  min_claims = 30
 )
 }
 \arguments{
@@ -39,32 +37,21 @@ exposure.}
 avoid outliers/extrapolation in the tails (default \code{c(0, 1)} = full
 range).}
 
-\item{min_claims}{Thin-cell threshold: levels/grid points with fewer
-claims get \code{IsThin = TRUE} (default 30).}
-
-\item{full_cred_claims}{Full-credibility claim standard for
-\strong{frequency} (default 1082 = observed frequency within 5 percent of
-the true value with 90 percent confidence, i.e. \code{(1.645 / 0.05)^2}
-for a Poisson process). The severity and premium standards are
-derived from it, see Details.}
-
-\item{cv_severity}{Coefficient of variation of the individual claim
-size, used to derive the severity and premium credibility standards.
-\code{NULL} (default) estimates it from \code{model_sev} when that is a Gamma
-model: for a Gamma fitted on average claim size with the claim count
-as weight, the Pearson dispersion estimates \code{CV^2} directly. Supply a
-value explicitly for any other family.}
+\item{min_claims}{Thin-cell threshold: levels/grid points backed by
+fewer claims get \code{IsThin = TRUE} (default 30). A GLM applies no
+shrinkage to a categorical level, so such a factor comes essentially
+from those few claims; it is dimmed by \code{\link[=make_rating_plot]{make_rating_plot()}} and
+greyed out by \code{\link[=export_rating_table]{export_rating_table()}}. Thin categorical levels also
+raise a warning.}
 }
 \value{
 A data.frame with one row per level/grid point per variable
 (columns \code{Variable}, \code{Type}, \code{Level}, \code{LevelNum}, \code{Group}, \code{IsBase},
-\code{Exposure}, \code{ClaimCount}, \verb{Factor_*}, \verb{Uplift_*},
-\code{Credibility_Frequency}, \code{Credibility_Severity},
-\code{Credibility_Premium}, \code{IsThin}, \code{XVar}, \code{GroupVar}) and attributes
-\code{intercept_frequency}, \code{intercept_severity}, \code{intercept_premium}
-(predictions at the base point, per unit of exposure), \code{base_values}
-(named list with the base value per variable) and \code{credibility}
-(the CV and the three full-credibility standards used).
+\code{Exposure}, \code{ClaimCount}, \verb{Factor_*}, \verb{Uplift_*}, \code{IsThin}, \code{XVar},
+\code{GroupVar}) and attributes \code{intercept_frequency},
+\code{intercept_severity}, \code{intercept_premium} (predictions at the base
+point, per unit of exposure) and \code{base_values} (named list with the
+base value per variable).
 }
 \description{
 Builds a table of multiplicative rating factors from a frequency and/or
@@ -83,33 +70,7 @@ gets the neutral factor 1 there (so \code{Factor_Premium} remains correct).
 Interaction rows contain the joint relativity relative to the base cell
 and the pure uplift: joint / (main_factor_x * main_factor_group).
 
-The \code{Credibility} column contains the limited-fluctuation (square-root)
-credibility of each level's own experience:
-\code{min(1, sqrt(ClaimCount / full_cred_claims))}. Levels with fewer than
-\code{min_claims} claims get \code{IsThin = TRUE} (thin categorical levels also
-raise a warning) and are dimmed in \code{\link[=make_rating_plot]{make_rating_plot()}}.
+Levels backed by fewer than \code{min_claims} claims get \code{IsThin = TRUE}
+(thin categorical levels also raise a warning) and are dimmed in
+\code{\link[=make_rating_plot]{make_rating_plot()}}.
 }
-\section{Credibility columns}{
-Each level gets the classical limited-fluctuation (square-root)
-credibility of its \strong{own} experience, \code{Z = min(1, sqrt(claims / N))},
-with a separate full-credibility standard \code{N} per quantity:
-
-\itemize{
-\item \code{Credibility_Frequency}: \code{N = full_cred_claims}
-\item \code{Credibility_Severity}: \code{N = full_cred_claims * CV^2}
-\item \code{Credibility_Premium}: \code{N = full_cred_claims * (1 + CV^2)}
-}
-
-Severity needs more claims than frequency whenever individual claim
-sizes vary more than a Poisson count does (\code{CV > 1}), which is the norm
-in non-life. The premium standard combines both sources of variation.
-When \code{CV} is unavailable (no severity model and no \code{cv_severity}), the
-severity and premium columns are \code{NA} and a warning is raised.
-
-These columns are diagnostics, not adjustments: the factors themselves
-are untouched GLM predictions. A GLM applies no shrinkage to a
-categorical level, so a low \code{Z} marks a genuinely unstable factor.
-(Continuous variables fitted with splines do borrow strength from
-neighbouring grid points.)
-}
-
