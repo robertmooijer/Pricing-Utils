@@ -275,7 +275,8 @@ plot_glm_predictor(model, predictor, n_bins = 150,
                    weight_var = NULL, weight_label = NULL,
                    color = ta_year_palette(1), color_pred = ta_gold,
                    title = NULL, ylab = NULL, xlab = NULL,
-                   metric_fmt = 4, bin_type = c("quantile", "width"))
+                   metric_fmt = 4, bin_type = c("quantile", "width"),
+                   y_range = NULL)
 ```
 
 Mode is detected automatically:
@@ -292,6 +293,22 @@ Mode is detected automatically:
 Numeric predictors are binned with **quantile bins** by default (each bin has
 roughly the same number of observations, avoiding noisy thin tails);
 `bin_type = "width"` restores equal-width binning.
+
+**Shared y-axis across variables.** By default the primary y-axis
+auto-scales to the values of that one plot, so two predictors on very
+different scales can look equally volatile. Pass `y_range = c(lo, hi)` to
+pin the axis, and reuse the same value across predictors to make them
+directly comparable:
+
+```r
+rng <- c(0, 0.4)
+plot_glm_predictor(m_freq, "AGE",    y_range = rng)
+plot_glm_predictor(m_freq, "REGION", y_range = rng)
+```
+
+Note the trade-off: a shared axis flattens variables with a narrow spread
+of their own, so use auto-scaling when inspecting one variable in detail
+and a fixed range when comparing variables side by side.
 
 **Returns** a plotly object with weight bars, an "Observed" line and a
 "Predicted" line.

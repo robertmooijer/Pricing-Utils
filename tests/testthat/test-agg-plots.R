@@ -15,6 +15,31 @@ test_that("plot_glm_predictor returns plotly objects", {
                   "plotly")
 })
 
+test_that("plot_glm_predictor: y_range is unused by default and fixable", {
+  # Default: the axis auto-scales (plotly may still fill in a computed
+  # range on build, so assert on autorange, which is the actual switch).
+  p_auto   <- plot_glm_predictor(m_freq, "LEEFTIJD", n_bins = 30)
+  yax_auto <- plotly::plotly_build(p_auto)$x$layout$yaxis
+  expect_true(isTRUE(yax_auto$autorange))
+
+  # Fixed: the requested range is honoured and auto-scaling is off
+  p_fixed   <- plot_glm_predictor(m_freq, "LEEFTIJD", n_bins = 30,
+                                  y_range = c(0, 0.5))
+  yax_fixed <- plotly::plotly_build(p_fixed)$x$layout$yaxis
+  expect_equal(as.numeric(unlist(yax_fixed$range)), c(0, 0.5))
+  expect_false(isTRUE(yax_fixed$autorange))
+
+  # Two predictors with an identical y_range share the same axis
+  p_a <- plot_glm_predictor(m_freq, "LEEFTIJD", n_bins = 30, y_range = c(0, 0.4))
+  p_b <- plot_glm_predictor(m_freq, "REGIO", y_range = c(0, 0.4))
+  expect_equal(
+    as.numeric(unlist(plotly::plotly_build(p_a)$x$layout$yaxis$range)),
+    as.numeric(unlist(plotly::plotly_build(p_b)$x$layout$yaxis$range)))
+
+  expect_error(plot_glm_predictor(m_freq, "LEEFTIJD", y_range = c(1, 1)),
+               "y_range")
+})
+
 test_that("make_rating_plot renders main effects and interactions", {
   expect_s3_class(make_rating_plot(tbl, "REGIO"), "plotly")
   expect_s3_class(make_rating_plot(tbl2, "LEEFTIJD:REGIO"), "plotly")

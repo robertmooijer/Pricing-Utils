@@ -16,7 +16,8 @@ plot_glm_predictor(
   ylab = NULL,
   xlab = NULL,
   metric_fmt = 4,
-  bin_type = c("quantile", "width")
+  bin_type = c("quantile", "width"),
+  y_range = NULL
 )
 }
 \arguments{
@@ -38,6 +39,12 @@ plot_glm_predictor(
 \item{metric_fmt}{Number of decimals in the tooltip (default 4).}
 
 \item{bin_type}{\code{"quantile"} (default) or \code{"width"}.}
+
+\item{y_range}{Optional \code{c(lo, hi)} to fix the primary y-axis range,
+e.g. to make multiple \code{plot_glm_predictor()} calls for different
+predictors visually comparable. Left \code{NULL} by default, in which
+case the axis auto-scales to the observed/predicted values of this
+plot only (plotly's default behaviour).}
 }
 \value{
 A plotly object with weight bars, an "Observed" line and a
