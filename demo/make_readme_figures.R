@@ -37,7 +37,7 @@ snap <- function(p, name, width = 900, height = 460) {
 # Render a data.frame excerpt as a styled table image, mirroring the
 # highlighting used by export_rating_table(): base row in light blue,
 # thin (low-credibility) rows greyed out and italic.
-snap_table <- function(df, name, digits = 3) {
+snap_table <- function(df, name, digits = 3, vwidth = 1800) {
   h <- htmltools::tags
   # Format per column type, as export_rating_table() does: counts with a
   # thousands separator and no decimals, factors/credibility with decimals.
@@ -71,8 +71,11 @@ snap_table <- function(df, name, digits = 3) {
   dir.create(dirname(html), showWarnings = FALSE, recursive = TRUE)
   htmltools::save_html(page, html)
   png <- file.path(out_dir, paste0("README-", name, ".png"))
+  # The viewport must be wider than the table, otherwise the crop to
+  # .wrap still clips the right-hand columns.
   webshot2::webshot(paste0("file://", normalizePath(html, winslash = "/")),
-                    file = png, selector = ".wrap", zoom = 2, delay = 1)
+                    file = png, selector = ".wrap", zoom = 2, delay = 1,
+                    vwidth = vwidth)
   cat("written:", png, "-",
       round(file.info(png)$size / 1024), "KB\n")
   invisible(png)
@@ -151,10 +154,13 @@ snap(make_rating_plot(tbl, "BRANDSTOF"), "rating-plot-categorical",
 # The rating table itself, styled like the Excel export
 snap_table(
   tbl[tbl$Variable == "BRANDSTOF" & is.na(tbl$Group),
-      c("Variable", "Level", "IsBase", "Exposure", "ClaimCount",
-        "Credibility", "IsThin", "Factor_Frequency", "Factor_Severity",
-        "Factor_Premium")],
+      c("Level", "IsBase", "Exposure", "ClaimCount",
+        "Credibility_Frequency", "Credibility_Severity", "IsThin",
+        "Factor_Frequency", "Factor_Severity", "Factor_Premium")],
   "rating-table")
+
+cat("\nCredibility standards used:\n")
+str(attr(tbl, "credibility"))
 
 # The interaction row is named after R's own term ordering (which may
 # differ from the order you typed), so look it up in the table.

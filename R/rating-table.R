@@ -36,17 +36,52 @@
 #'   range).
 #' @param min_claims Thin-cell threshold: levels/grid points with fewer
 #'   claims get `IsThin = TRUE` (default 30).
-#' @param full_cred_claims Full-credibility claim standard for the
-#'   `Credibility` column (default 1082 = observed frequency within 5
-#'   percent of the true value with 90 percent confidence).
+#' @param full_cred_claims Full-credibility claim standard for
+#'   **frequency** (default 1082 = observed frequency within 5 percent of
+#'   the true value with 90 percent confidence, i.e. `(1.645 / 0.05)^2`
+#'   for a Poisson process). The severity and premium standards are
+#'   derived from it, see Details.
+#' @param cv_severity Coefficient of variation of the individual claim
+#'   size, used to derive the severity and premium credibility standards.
+#'   `NULL` (default) estimates it from `model_sev` when that is a Gamma
+#'   model: for a Gamma fitted on average claim size with the claim count
+#'   as weight, the Pearson dispersion estimates `CV^2` directly. Supply a
+#'   value explicitly for any other family.
+#'
+#' @details
+#' # Credibility columns
+#'
+#' Each level gets the classical limited-fluctuation (square-root)
+#' credibility of its **own** experience, `Z = min(1, sqrt(claims / N))`,
+#' with a separate full-credibility standard `N` per quantity:
+#'
+#' \itemize{
+#'   \item `Credibility_Frequency`: `N = full_cred_claims`
+#'   \item `Credibility_Severity`: `N = full_cred_claims * CV^2`
+#'   \item `Credibility_Premium`: `N = full_cred_claims * (1 + CV^2)`
+#' }
+#'
+#' Severity needs more claims than frequency whenever individual claim
+#' sizes vary more than a Poisson count does (`CV > 1`), which is the norm
+#' in non-life. The premium standard combines both sources of variation.
+#' When `CV` is unavailable (no severity model and no `cv_severity`), the
+#' severity and premium columns are `NA` and a warning is raised.
+#'
+#' These columns are diagnostics, not adjustments: the factors themselves
+#' are untouched GLM predictions. A GLM applies no shrinkage to a
+#' categorical level, so a low `Z` marks a genuinely unstable factor.
+#' (Continuous variables fitted with splines do borrow strength from
+#' neighbouring grid points.)
 #'
 #' @return A data.frame with one row per level/grid point per variable
 #'   (columns `Variable`, `Type`, `Level`, `LevelNum`, `Group`, `IsBase`,
-#'   `Exposure`, `ClaimCount`, `Factor_*`, `Uplift_*`, `Credibility`,
-#'   `IsThin`, `XVar`, `GroupVar`) and attributes `intercept_frequency`,
-#'   `intercept_severity`, `intercept_premium` (predictions at the base
-#'   point, per unit of exposure) and `base_values` (named list with the
-#'   base value per variable).
+#'   `Exposure`, `ClaimCount`, `Factor_*`, `Uplift_*`,
+#'   `Credibility_Frequency`, `Credibility_Severity`,
+#'   `Credibility_Premium`, `IsThin`, `XVar`, `GroupVar`) and attributes
+#'   `intercept_frequency`, `intercept_severity`, `intercept_premium`
+#'   (predictions at the base point, per unit of exposure), `base_values`
+#'   (named list with the base value per variable) and `credibility`
+#'   (the CV and the three full-credibility standards used).
 #' @export
 make_rating_table <- function(model_freq = NULL,
                               model_sev  = NULL,
@@ -57,7 +92,8 @@ make_rating_table <- function(model_freq = NULL,
                               base_level   = c("first", "exposure"),
                               trim         = c(0, 1),
                               min_claims   = 30,
-                              full_cred_claims = 1082) {
+                              full_cred_claims = 1082,
+                              cv_severity  = NULL) {
 
   base_level <- match.arg(base_level)
   if (is.null(model_freq) && is.null(model_sev)) {
@@ -68,6 +104,9 @@ make_rating_table <- function(model_freq = NULL,
     stop("make_rating_table: 'trim' must be two quantiles with trim[1] < trim[2].")
   if (min_claims < 0 || full_cred_claims <= 0)
     stop("make_rating_table: 'min_claims' and 'full_cred_claims' must be positive.")
+  if (!is.null(cv_severity) &&
+      (length(cv_severity) != 1 || !is.finite(cv_severity) || cv_severity <= 0))
+    stop("make_rating_table: 'cv_severity' must be a single positive number.")
 
   # Multiplicative factors are only valid for log-link models
   check_link <- function(model, model_name) {
@@ -376,15 +415,56 @@ make_rating_table <- function(model_freq = NULL,
   if (length(int_rows)) out <- rbind(out, do.call(rbind, int_rows))
 
   # Credibility / thin-cell flags ----------------------------------------------
-  # Limited-fluctuation (square-root) credibility on the claim count per
-  # level: Z = min(1, sqrt(claims / full_cred_claims)). Z quantifies how
-  # much standalone experience backs a level; the GLM factor itself
-  # already pools information across the portfolio, so a low Z does not
-  # invalidate the factor but does mean it leans heavily on the model
-  # structure rather than on that level's own data.
-  out$Credibility <- ifelse(is.na(out$ClaimCount), NA_real_,
-                            pmin(1, sqrt(out$ClaimCount / full_cred_claims)))
+  # Limited-fluctuation (square-root) credibility of each level's OWN
+  # experience, with a separate full-credibility standard per quantity:
+  #   frequency: N = full_cred_claims                (Poisson counts)
+  #   severity : N = full_cred_claims * CV^2         (claim-size variation)
+  #   premium  : N = full_cred_claims * (1 + CV^2)   (both combined)
+  # Severity needs more claims than frequency as soon as CV > 1, which is
+  # the norm in non-life. These are diagnostics only: the factors are
+  # untouched GLM predictions, and a GLM applies no shrinkage to a
+  # categorical level, so a low Z marks a genuinely unstable factor.
+  cv2 <- if (!is.null(cv_severity)) {
+    cv_severity^2
+  } else if (!is.null(model_sev)) {
+    if (identical(family(model_sev)$family, "Gamma")) {
+      # Gamma on average claim size with claim counts as prior weights:
+      # Var(Y) = phi * mu^2, so the Pearson dispersion estimates CV^2 of
+      # the individual claim size.
+      sum(residuals(model_sev, type = "pearson")^2) / model_sev$df.residual
+    } else {
+      warning("make_rating_table: cannot derive the claim-size CV from a '",
+              family(model_sev)$family, "' severity model; supply ",
+              "'cv_severity' to get severity/premium credibility.",
+              call. = FALSE)
+      NA_real_
+    }
+  } else {
+    NA_real_
+  }
+
+  z_of <- function(n_full) {
+    if (!is.finite(n_full) || n_full <= 0) return(rep(NA_real_, nrow(out)))
+    ifelse(is.na(out$ClaimCount), NA_real_,
+           pmin(1, sqrt(out$ClaimCount / n_full)))
+  }
+  n_freq <- full_cred_claims
+  n_sev  <- full_cred_claims * cv2
+  n_prem <- full_cred_claims * (1 + cv2)
+
+  out$Credibility_Frequency <- z_of(n_freq)
+  out$Credibility_Severity  <- z_of(n_sev)
+  out$Credibility_Premium   <- z_of(n_prem)
   out$IsThin <- ifelse(is.na(out$ClaimCount), NA, out$ClaimCount < min_claims)
+
+  attr(out, "credibility") <- list(
+    cv                   = if (is.finite(cv2)) sqrt(cv2) else NA_real_,
+    cv_source            = if (!is.null(cv_severity)) "user"
+                           else if (is.finite(cv2)) "estimated from model_sev"
+                           else "unavailable",
+    full_cred_frequency  = n_freq,
+    full_cred_severity   = n_sev,
+    full_cred_premium    = n_prem)
 
   # Warn for thin categorical main-effect levels (thin tail bins are
   # normal for continuous grids and would make the warning noisy)

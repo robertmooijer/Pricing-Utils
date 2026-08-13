@@ -101,8 +101,10 @@ export_rating_table <- function(rating_tbl, file = "rating_table.xlsx",
 
   # Main-effect sheets ----------------------------------------------------------
   keep_main <- intersect(c("Level", "IsBase", "Exposure", "ClaimCount",
-                           "Credibility", "IsThin", "Factor_Frequency",
-                           "Factor_Severity", "Factor_Premium"),
+                           "Credibility_Frequency", "Credibility_Severity",
+                           "Credibility_Premium", "IsThin",
+                           "Factor_Frequency", "Factor_Severity",
+                           "Factor_Premium"),
                          names(rating_tbl))
   for (v in unique(rating_tbl$Variable[is.na(rating_tbl$Group)])) {
     d <- rating_tbl[rating_tbl$Variable == v & is.na(rating_tbl$Group),

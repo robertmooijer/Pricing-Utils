@@ -59,8 +59,24 @@ test_that("base_level = 'exposure' picks the largest level as reference", {
 
 test_that("credibility and thin-cell columns are correct", {
   cc <- tbl$ClaimCount[!is.na(tbl$ClaimCount)]
-  expect_equal(tbl$Credibility[!is.na(tbl$ClaimCount)],
-               pmin(1, sqrt(cc / 1082)))
+  ok <- !is.na(tbl$ClaimCount)
+
+  # Frequency: the plain Poisson standard
+  expect_equal(tbl$Credibility_Frequency[ok], pmin(1, sqrt(cc / 1082)))
+
+  # Severity/premium: derived from the claim-size CV, estimated from the
+  # Gamma severity model's Pearson dispersion (CV^2 = phi)
+  phi <- sum(residuals(m_sev, type = "pearson")^2) / m_sev$df.residual
+  expect_equal(tbl$Credibility_Severity[ok], pmin(1, sqrt(cc / (1082 * phi))))
+  expect_equal(tbl$Credibility_Premium[ok],
+               pmin(1, sqrt(cc / (1082 * (1 + phi)))))
+
+  # Severity always needs at least as many claims as frequency when CV > 1
+  att <- attr(tbl, "credibility")
+  expect_equal(att$cv, sqrt(phi))
+  expect_identical(att$cv_source, "estimated from model_sev")
+  expect_gt(att$full_cred_premium, att$full_cred_frequency)
+
   expect_identical(tbl$IsThin[!is.na(tbl$ClaimCount)], cc < 30)
 
   expect_warning(
@@ -69,4 +85,30 @@ test_that("credibility and thin-cell columns are correct", {
     "little standalone")
   expect_true(all(tbl_thin$IsThin[!is.na(tbl_thin$IsThin)]))
   expect_s3_class(make_rating_plot(tbl_thin, "REGIO"), "plotly")
+})
+
+test_that("severity credibility needs a CV and can be supplied explicitly", {
+  # No severity model and no cv_severity: frequency only
+  t_freq <- make_rating_table(m_freq, NULL, data = dat)
+  expect_false(any(is.na(t_freq$Credibility_Frequency[
+    !is.na(t_freq$ClaimCount)])))
+  expect_true(all(is.na(t_freq$Credibility_Severity)))
+  expect_true(all(is.na(t_freq$Credibility_Premium)))
+  expect_identical(attr(t_freq, "credibility")$cv_source, "unavailable")
+
+  # Explicit CV is honoured
+  t_cv <- make_rating_table(m_freq, NULL, data = dat, cv_severity = 2)
+  cc <- t_cv$ClaimCount[!is.na(t_cv$ClaimCount)]
+  expect_equal(t_cv$Credibility_Severity[!is.na(t_cv$ClaimCount)],
+               pmin(1, sqrt(cc / (1082 * 4))))
+  expect_equal(attr(t_cv, "credibility")$cv, 2)
+  expect_identical(attr(t_cv, "credibility")$cv_source, "user")
+
+  # A non-Gamma severity model warns instead of guessing
+  m_gauss <- glm(AvgLoss ~ REGIO, data = d_sev, weights = AantalClaims)
+  expect_warning(make_rating_table(m_freq, m_gauss, data = dat),
+                 "claim-size CV")
+
+  expect_error(make_rating_table(m_freq, NULL, data = dat, cv_severity = -1),
+               "cv_severity")
 })

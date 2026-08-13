@@ -417,7 +417,8 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
 | `base_level` | `"first"` = first factor level is the reference; `"exposure"` = the level with the largest exposure is the reference |
 | `trim` | quantile range for continuous grids, e.g. `c(0.005, 0.995)` to avoid outlier tails and spline extrapolation |
 | `min_claims` | thin-cell threshold: levels with fewer claims get `IsThin = TRUE` (categorical thin levels also raise a warning) |
-| `full_cred_claims` | full-credibility claim standard for the `Credibility` column (default 1,082) |
+| `full_cred_claims` | full-credibility claim standard for **frequency** (default 1,082); the severity and premium standards are derived from it |
+| `cv_severity` | coefficient of variation of the individual claim size. `NULL` (default) estimates it from a Gamma `model_sev`; supply it explicitly for other families |
 
 **Returns** a data.frame with one row per level/grid point per variable:
 
@@ -431,14 +432,16 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
 | `Exposure`, `ClaimCount` | data volume per level (per cell for cat × cat interactions) |
 | `Factor_Frequency`, `Factor_Severity`, `Factor_Premium` | multiplicative relativities vs the base; `Premium = Frequency × Severity`; a variable absent from a model gets the neutral factor 1 there |
 | `Uplift_Frequency`, `Uplift_Severity`, `Uplift_Premium` | interaction rows only: pure interaction effect = joint / (main<sub>x</sub> × main<sub>group</sub>); equals 1 everywhere when there is no interaction |
-| `Credibility` | limited-fluctuation credibility of the level's own experience: `min(1, sqrt(ClaimCount / full_cred_claims))` |
+| `Credibility_Frequency`, `Credibility_Severity`, `Credibility_Premium` | limited-fluctuation credibility of the level's **own** experience, `min(1, sqrt(ClaimCount / N))`, with a separate full-credibility standard `N` per quantity — see [Thin cells and credibility](#thin-cells-and-credibility) |
 | `IsThin` | `TRUE` when `ClaimCount < min_claims`; these levels are dimmed and flagged in `make_rating_plot()` |
 
 Attributes on the returned table:
 
 - `intercept_frequency`, `intercept_severity`, `intercept_premium` — the
   model prediction at the base point, **per unit of exposure**;
-- `base_values` — named list with the base value used per variable.
+- `base_values` — named list with the base value used per variable;
+- `credibility` — the claim-size CV used, where it came from, and the
+  three full-credibility standards.
 
 Inline formula transformations such as `factor(YEAR)` and `ns(AGE, 4)` are
 resolved to their underlying columns; terms whose base variable cannot be
@@ -446,8 +449,9 @@ found in `data` are skipped with a warning rather than crashing the call.
 
 The rows for one categorical variable look like this (base row
 highlighted, thin row greyed out, as in the Excel export). Note the last
-level: 5 claims give it a credibility of 0.07, so its factor of 1.22 rests
-almost entirely on the model structure rather than on its own experience:
+level: 5 claims give it a credibility of 0.07 on frequency and 0.08 on
+severity, so both its factors are essentially noise — while `Diesel`, with
+835 claims, is already fully credible on severity in this portfolio:
 
 ![Rating table excerpt](man/figures/README-rating-table.png)
 
@@ -621,20 +625,51 @@ tail bins that look like misfit but are noise.
 
 ### Thin cells and credibility
 
-The `Credibility` column uses the classical **limited-fluctuation
-(square-root) standard**: full credibility at `full_cred_claims` claims
-(default 1,082, i.e. the observed frequency lies within ±5% of the true value
-with 90% confidence for a Poisson process), and partial credibility
-`Z = min(1, √(claims / 1082))` below that.
+The credibility columns use the classical **limited-fluctuation
+(square-root) standard**: `Z = min(1, √(claims / N))`, where `N` is the
+number of claims needed for full credibility. Crucially, `N` is *not* the
+same for frequency and severity, so the table reports three columns:
 
-Read `Z` as *how much standalone experience backs this level*. The GLM
-factor itself already pools information across the whole portfolio through
-the model structure, so a low `Z` does not invalidate the factor — it means
-the factor leans on the model rather than on that level's own data, and it
-deserves scrutiny before being used in a tariff. The `IsThin` flag (claims
-below `min_claims`) marks the levels where this is acute; `make_rating_plot()`
-dims them so a factor of 1.4 on 12 claims is never read with the same
-confidence as one on 12,000.
+| Column | Full-credibility standard `N` | Why |
+|---|---|---|
+| `Credibility_Frequency` | `full_cred_claims` (default 1,082) | For a Poisson count, `(z/k)² = (1.645/0.05)²` — the frequency is within ±5% of its true value with 90% confidence |
+| `Credibility_Severity` | `full_cred_claims × CV²` | The mean claim size inherits the variability of the claim-size distribution, so the standard scales with its squared coefficient of variation |
+| `Credibility_Premium` | `full_cred_claims × (1 + CV²)` | The risk premium carries both sources of variation: count *and* size |
+
+`CV` is the coefficient of variation of the **individual** claim size. It
+is estimated automatically from a Gamma severity model: for a Gamma fitted
+on average claim size with the claim count as weight, `Var(Y) = φ·μ²`, so
+the Pearson dispersion `φ` estimates `CV²` directly. For any other family
+you must supply `cv_severity` yourself, otherwise the severity and premium
+columns are `NA` and a warning is raised.
+
+The practical consequence: in most non-life portfolios `CV > 1` (a long
+right tail of large claims), so **severity needs considerably more claims
+than frequency** for the same reliability — at `CV = 2` the severity
+standard is 4,328 claims against 1,082 for frequency. A level can therefore
+be perfectly credible on frequency while its severity factor is still
+mostly noise. (The demo portfolio simulates well-behaved Gamma claim sizes
+with `CV ≈ 0.8`, so there severity happens to need *fewer* claims — real
+data rarely looks that friendly.)
+
+Read `Z` as *how much standalone experience backs this level*. It is a
+diagnostic, not an adjustment: the factors are untouched GLM predictions.
+A GLM applies **no shrinkage** to a categorical level, so its coefficient
+comes essentially from that level's own claims and a low `Z` marks a
+genuinely unstable estimate. (Continuous variables fitted with splines do
+borrow strength from neighbouring grid points, so a sparse stretch of the
+curve is supported by the data around it.)
+
+Typical responses to a low `Z` are grouping the level with a related one,
+capping the factor, or blending it manually toward neutral:
+
+```r
+Factor_adj <- Z * Factor + (1 - Z) * 1
+```
+
+The `IsThin` flag (claims below `min_claims`) marks the levels where this
+is acute; `make_rating_plot()` dims them so a factor of 1.4 on 12 claims is
+never read with the same confidence as one on 12,000.
 
 ### Overdispersion
 
