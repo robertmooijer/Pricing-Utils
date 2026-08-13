@@ -15,7 +15,9 @@ premium_impact(
   rebase = TRUE,
   by = NULL,
   n_show = 10,
-  exposure_col = "Exposure"
+  exposure_col = "Exposure",
+  x_range = NULL,
+  y_range = NULL
 )
 }
 \arguments{
@@ -39,6 +41,14 @@ breakdown (exposure-weighted mean change).}
 \item{n_show}{Number of rows in the winners/losers tables (default 10).}
 
 \item{exposure_col}{Exposure column (default \code{"Exposure"}).}
+
+\item{x_range, y_range}{Optional \code{c(lo, hi)} to fix the axes of the
+returned histogram, so impact plots for different scenarios become
+directly comparable. \code{x_range} bounds the premium change (\%) - the
+axis you normally want to align - and \code{y_range} the exposure axis.
+Both \code{NULL} (default) auto-scale. Note that \code{x_range} only sets the
+visible window; the bins are always computed over the full range of
+changes, so the summary statistics are unaffected.}
 }
 \value{
 A list with \code{summary} (display table with the headline numbers),

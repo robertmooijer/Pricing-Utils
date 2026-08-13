@@ -16,7 +16,8 @@ make_pdp(
   exposure_col = "Exposure",
   claims_col = "AantalClaims",
   loss_col = "SCHADELAST",
-  discrete_cutoff = 25
+  discrete_cutoff = 25,
+  y_range = NULL
 )
 }
 \arguments{
@@ -40,6 +41,10 @@ make_pdp(
 \item{exposure_col, claims_col, loss_col}{Column names, see \code{\link[=agg_all]{agg_all()}}.}
 
 \item{discrete_cutoff}{See \code{\link[=make_plot]{make_plot()}}.}
+
+\item{y_range}{Optional \code{c(lo, hi)} to fix the primary y-axis range, so
+PDPs for different predictors become directly comparable. \code{NULL}
+(default) auto-scales to this plot's own values.}
 }
 \value{
 A plotly object with exposure/claim bars, the observed one-way

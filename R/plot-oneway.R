@@ -21,6 +21,10 @@
 #'   [agg_all()].
 #' @param discrete_cutoff Maximum number of unique numeric values that is
 #'   still treated as discrete (markers only, default 25).
+#' @param y_range Optional `c(lo, hi)` to fix the primary y-axis range, so
+#'   plots for different variables become directly comparable. `NULL`
+#'   (default) auto-scales to this plot's own values. In facet mode a fixed
+#'   range applies to every facet, overriding the per-year free scales.
 #'
 #' @return A plotly object.
 #' @export
@@ -41,10 +45,12 @@ make_plot <- function(data, col, metric = c("Frequency", "Severity"),
                       claims_col = "AantalClaims",
                       loss_col   = "SCHADELAST",
                       year_col   = "BOEKJAAR",
-                      discrete_cutoff = 25) {
+                      discrete_cutoff = 25,
+                      y_range = NULL) {
 
   display <- match.arg(display)
   metric  <- match.arg(metric)
+  y_range <- .check_range(y_range, "make_plot")
   .check_cols(data, c(col, exposure_col, claims_col, loss_col,
                       if (by_year) year_col), "make_plot")
 
@@ -116,7 +122,11 @@ make_plot <- function(data, col, metric = c("Frequency", "Severity"),
       scale_color_manual(name = NULL,
                          values = setNames(color_single, metric)) +
       scale_y_continuous(name = y_label) +
-      facet_wrap(vars(Year), scales = "free_y") +
+      # A fixed range pins every facet to the same scale (overrides free_y);
+      # coord_cartesian clips the view without dropping the bars/points.
+      (if (is.null(y_range)) NULL else
+         ggplot2::coord_cartesian(ylim = y_range)) +
+      facet_wrap(vars(Year), scales = if (is.null(y_range)) "free_y" else "fixed") +
       labs(x = col, title = paste(metric, "-", col),
            caption = "Exposure bars are rescaled per facet; the tooltip shows the actual value.") +
       theme_minimal() +
@@ -204,7 +214,9 @@ make_plot <- function(data, col, metric = c("Frequency", "Severity"),
                     showgrid   = FALSE),
       yaxis  = list(title      = y_label,
                     gridcolor  = "#D0D8E0",
-                    zeroline   = FALSE),
+                    zeroline   = FALSE,
+                    range      = y_range,
+                    autorange  = is.null(y_range)),
       yaxis2 = list(title      = "Exposure",
                     overlaying = "y",
                     side       = "right",

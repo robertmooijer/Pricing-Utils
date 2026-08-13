@@ -8,7 +8,8 @@ plot_glm_residuals(
   model,
   predictor = NULL,
   n_bins = 50,
-  residual_type = c("pearson", "deviance")
+  residual_type = c("pearson", "deviance"),
+  y_range = NULL
 )
 }
 \arguments{
@@ -20,6 +21,10 @@ values.}
 \item{n_bins}{Number of quantile bins for numeric x (default 50).}
 
 \item{residual_type}{\code{"pearson"} (default) or \code{"deviance"}.}
+
+\item{y_range}{Optional \code{c(lo, hi)} to fix the residual (y) axis range,
+so residual plots for different predictors or models become directly
+comparable. \code{NULL} (default) auto-scales to this plot's own values.}
 }
 \value{
 A plotly object.

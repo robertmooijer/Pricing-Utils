@@ -66,13 +66,18 @@ glm_diagnostics <- function(model_freq = NULL, model_sev = NULL) {
 #'   values.
 #' @param n_bins Number of quantile bins for numeric x (default 50).
 #' @param residual_type `"pearson"` (default) or `"deviance"`.
+#' @param y_range Optional `c(lo, hi)` to fix the residual (y) axis range,
+#'   so residual plots for different predictors or models become directly
+#'   comparable. `NULL` (default) auto-scales to this plot's own values.
 #'
 #' @return A plotly object.
 #' @export
 plot_glm_residuals <- function(model, predictor = NULL, n_bins = 50,
-                               residual_type = c("pearson", "deviance")) {
+                               residual_type = c("pearson", "deviance"),
+                               y_range = NULL) {
 
   residual_type <- match.arg(residual_type)
+  y_range <- .check_range(y_range, "plot_glm_residuals")
   if (!inherits(model, "glm")) stop("'model' must be a glm object.")
   if (n_bins < 2) stop("plot_glm_residuals: 'n_bins' must be at least 2.")
 
@@ -171,7 +176,8 @@ plot_glm_residuals <- function(model, predictor = NULL, n_bins = 50,
                     font = list(color = ta_navy, size = 14)),
       xaxis  = xaxis_cfg,
       yaxis  = list(title = paste("Mean", residual_type, "residual"),
-                    gridcolor = "#D0D8E0", zeroline = FALSE),
+                    gridcolor = "#D0D8E0", zeroline = FALSE,
+                    range = y_range, autorange = is.null(y_range)),
       shapes = list(list(type = "line", xref = "paper",
                          x0 = 0, x1 = 1, y0 = 0, y1 = 0,
                          line = list(color = ta_muted, width = 1,

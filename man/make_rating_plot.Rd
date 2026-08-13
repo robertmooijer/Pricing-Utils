@@ -4,7 +4,13 @@
 \alias{make_rating_plot}
 \title{Plot rating factors from a rating table}
 \usage{
-make_rating_plot(rating_tbl, var, metric_fmt = 4, metric = NULL)
+make_rating_plot(
+  rating_tbl,
+  var,
+  metric_fmt = 4,
+  metric = NULL,
+  y_range = NULL
+)
 }
 \arguments{
 \item{rating_tbl}{Output of \code{\link[=make_rating_table]{make_rating_table()}}.}
@@ -15,6 +21,10 @@ make_rating_plot(rating_tbl, var, metric_fmt = 4, metric = NULL)
 
 \item{metric}{For interaction plots: \code{"Frequency"}, \code{"Severity"} or
 \code{"Premium"} (default: Premium when both models are present).}
+
+\item{y_range}{Optional \code{c(lo, hi)} to fix the factor (primary) y-axis
+range, so factor plots for different variables become directly
+comparable. \code{NULL} (default) auto-scales to this plot's own values.}
 }
 \value{
 A plotly object.

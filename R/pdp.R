@@ -29,6 +29,9 @@
 #' @param metric_fmt Number of decimals in the tooltip (default 4).
 #' @param exposure_col,claims_col,loss_col Column names, see [agg_all()].
 #' @param discrete_cutoff See [make_plot()].
+#' @param y_range Optional `c(lo, hi)` to fix the primary y-axis range, so
+#'   PDPs for different predictors become directly comparable. `NULL`
+#'   (default) auto-scales to this plot's own values.
 #'
 #' @return A plotly object with exposure/claim bars, the observed one-way
 #'   line and the PDP line.
@@ -44,9 +47,11 @@ make_pdp <- function(model,
                      exposure_col = "Exposure",
                      claims_col   = "AantalClaims",
                      loss_col     = "SCHADELAST",
-                     discrete_cutoff = 25) {
+                     discrete_cutoff = 25,
+                     y_range      = NULL) {
 
-  metric <- match.arg(metric)
+  metric  <- match.arg(metric)
+  y_range <- .check_range(y_range, "make_pdp")
   if (!inherits(model, "glm"))
     stop("make_pdp: 'model' must be a glm object.", call. = FALSE)
   if (!is.null(transform))
@@ -248,7 +253,9 @@ make_pdp <- function(model,
                     showgrid  = FALSE),
       yaxis  = list(title     = y_label,
                     gridcolor = "#D0D8E0",
-                    zeroline  = FALSE),
+                    zeroline  = FALSE,
+                    range     = y_range,
+                    autorange = is.null(y_range)),
       yaxis2 = list(title      = exposure_label,
                     overlaying = "y",
                     side       = "right",

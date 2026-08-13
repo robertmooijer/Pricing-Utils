@@ -31,6 +31,15 @@
   list(mf = mf, data = d, weights = as.numeric(pw), offset = model$offset)
 }
 
+# Validate an optional axis range c(lo, hi). Returns it as numeric, or
+# NULL when not supplied (in which case the axis auto-scales).
+.check_range <- function(rng, fn, arg = "y_range") {
+  if (is.null(rng)) return(NULL)
+  if (length(rng) != 2 || !all(is.finite(rng)) || rng[1] >= rng[2])
+    stop(fn, ": '", arg, "' must be c(lo, hi) with lo < hi.", call. = FALSE)
+  as.numeric(rng)
+}
+
 # Coerce values to the type of an existing column, so that inline
 # transformations in the formula (e.g. factor(YEAR) on a numeric column)
 # can be predicted correctly.

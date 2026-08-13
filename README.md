@@ -21,6 +21,7 @@ on a secondary axis, horizontal legends) and export to PNG via the plotly mode b
 - [Getting started](#getting-started)
 - [Data conventions](#data-conventions)
 - [Quick start example](#quick-start-example)
+- [Gallery](#gallery)
 - [Function reference](#function-reference)
   - [`agg_all()`](#agg_all)
   - [`make_plot()`](#make_plot)
@@ -166,6 +167,35 @@ pricing_report(m_freq, m_sev, dat,               # everything in one HTML
 
 ---
 
+## Gallery
+
+All figures below are real output, generated from a simulated 40k-policy
+motor portfolio by `demo/make_readme_figures.R`. In practice they are
+interactive plotly widgets (hover, zoom, toggle series); these are static
+screenshots.
+
+**One-way exploration** — observed frequency per level with exposure bars,
+split by accounting year:
+
+![One-way plot](man/figures/README-oneway.png)
+
+**Actual vs expected** — observed and predicted frequency per quantile bin
+of a predictor, the core model-fit check:
+
+![Actual vs expected](man/figures/README-actual-vs-expected.png)
+
+**Rating factors** — the multiplicative relativities that go into the
+tariff, relative to the base level (dotted line at 1.0):
+
+![Rating factors](man/figures/README-rating-factors.png)
+
+**Interactions** — one curve per level of the group variable; here young
+drivers are materially worse in the Randstad than elsewhere:
+
+![Interaction plot](man/figures/README-interaction.png)
+
+---
+
 ## Function reference
 
 ### `agg_all()`
@@ -252,6 +282,8 @@ for the rationale):
 **Returns** a plotly object with three traces: exposure/claim bars,
 "Observed" (one-way marginal from `raw_data`) and "PDP (model)".
 
+![Partial dependence plot](man/figures/README-pdp.png)
+
 > Interpretation caveat: the observed line is a one-way marginal (it includes
 > correlations with all other rating factors), while the PDP is a partial
 > effect. A gap between the two does not by itself indicate misfit.
@@ -301,14 +333,25 @@ pin the axis, and reuse the same value across predictors to make them
 directly comparable:
 
 ```r
-rng <- c(0, 0.4)
-plot_glm_predictor(m_freq, "AGE",    y_range = rng)
-plot_glm_predictor(m_freq, "REGION", y_range = rng)
+rng <- c(0, 0.55)
+plot_glm_predictor(m_freq, "LEEFTIJD", y_range = rng)
+plot_glm_predictor(m_freq, "REGIO",    y_range = rng)
 ```
 
-Note the trade-off: a shared axis flattens variables with a narrow spread
-of their own, so use auto-scaling when inspecting one variable in detail
-and a fixed range when comparing variables side by side.
+| | |
+|---|---|
+| ![Fixed y-axis, age](man/figures/README-yrange-age.png) | ![Fixed y-axis, region](man/figures/README-yrange-regio.png) |
+
+Both panels share one axis, so the age effect is visibly the stronger
+driver. Note the trade-off: a shared axis flattens variables with a narrow
+spread of their own, so use auto-scaling when inspecting one variable in
+detail and a fixed range when comparing variables side by side.
+
+`y_range` is available on every plotting function in the package
+(`make_plot()`, `make_pdp()`, `make_rating_plot()`,
+`plot_glm_residuals()`, and `premium_impact()`, which additionally takes
+an `x_range` for its change axis). It is `NULL` everywhere by default,
+which keeps the usual auto-scaling.
 
 **Returns** a plotly object with weight bars, an "Observed" line and a
 "Predicted" line.
@@ -349,6 +392,8 @@ a candidate spline, banding or interaction. Categorical predictors get error
 bars per level instead of a ribbon.
 
 **Returns** a plotly object.
+
+![Binned residual plot](man/figures/README-residuals.png)
 
 ### `make_rating_table()`
 
@@ -454,6 +499,8 @@ a named list), `policy` (per-row old/new/percent change),
 `largest_increases`/`largest_decreases` (top-`n_show` dislocations) and
 `plot` (exposure-weighted histogram of premium changes with the median
 marked).
+
+![Premium impact histogram](man/figures/README-premium-impact.png)
 
 ### `export_rating_table()`
 
@@ -625,6 +672,22 @@ devtools::check()       # full R CMD check, as run in CI on every push
 
 The GitHub Actions workflow (`R-CMD-check`) runs the full check on every
 push to `main`.
+
+## Demo and figures
+
+`demo/run_demo.R` simulates a 100k-policy motor portfolio (with a
+deliberately rare fuel type to show the thin-cell flags, and a real
+age x region interaction) and writes every deliverable: the HTML report,
+the Excel rating workbook and the impact analysis.
+
+`demo/make_readme_figures.R` regenerates the PNGs in `man/figures/` used
+above, by rendering the plotly widgets in headless Chrome (requires
+`webshot2` and a Chrome installation). Run both from the project root:
+
+```sh
+Rscript demo/run_demo.R
+Rscript demo/make_readme_figures.R
+```
 
 ## Known limitations
 

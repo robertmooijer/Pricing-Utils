@@ -17,7 +17,8 @@ make_plot(
   claims_col = "AantalClaims",
   loss_col = "SCHADELAST",
   year_col = "BOEKJAAR",
-  discrete_cutoff = 25
+  discrete_cutoff = 25,
+  y_range = NULL
 )
 }
 \arguments{
@@ -43,6 +44,11 @@ aggregate).}
 
 \item{discrete_cutoff}{Maximum number of unique numeric values that is
 still treated as discrete (markers only, default 25).}
+
+\item{y_range}{Optional \code{c(lo, hi)} to fix the primary y-axis range, so
+plots for different variables become directly comparable. \code{NULL}
+(default) auto-scales to this plot's own values. In facet mode a fixed
+range applies to every facet, overriding the per-year free scales.}
 }
 \value{
 A plotly object.

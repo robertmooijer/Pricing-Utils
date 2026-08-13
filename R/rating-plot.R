@@ -14,11 +14,16 @@
 #' @param metric_fmt Number of decimals in the tooltip (default 4).
 #' @param metric For interaction plots: `"Frequency"`, `"Severity"` or
 #'   `"Premium"` (default: Premium when both models are present).
+#' @param y_range Optional `c(lo, hi)` to fix the factor (primary) y-axis
+#'   range, so factor plots for different variables become directly
+#'   comparable. `NULL` (default) auto-scales to this plot's own values.
 #'
 #' @return A plotly object.
 #' @export
-make_rating_plot <- function(rating_tbl, var, metric_fmt = 4, metric = NULL) {
+make_rating_plot <- function(rating_tbl, var, metric_fmt = 4, metric = NULL,
+                             y_range = NULL) {
 
+  y_range <- .check_range(y_range, "make_rating_plot")
   d <- rating_tbl[rating_tbl$Variable == var, , drop = FALSE]
   if (nrow(d) == 0) stop("Variable '", var, "' not found.")
 
@@ -93,7 +98,9 @@ make_rating_plot <- function(rating_tbl, var, metric_fmt = 4, metric = NULL) {
                xaxis  = list(title = var, tickangle = -45,
                              tickfont = list(size = 9), showgrid = FALSE),
                yaxis  = list(title = "Factor (base = 1.0)",
-                             gridcolor = "#D0D8E0", zeroline = FALSE),
+                             gridcolor = "#D0D8E0", zeroline = FALSE,
+                             range = y_range,
+                             autorange = is.null(y_range)),
                yaxis2 = list(title = "Exposure", overlaying = "y", side = "right",
                              showgrid = FALSE,
                              tickfont = list(color = ta_muted),
@@ -185,7 +192,8 @@ make_rating_plot <- function(rating_tbl, var, metric_fmt = 4, metric = NULL) {
       xaxis = list(title = xvar, tickangle = -45,
                    tickfont = list(size = 9), showgrid = FALSE),
       yaxis = list(title = paste0("Factor ", metric, " (base cell = 1.0)"),
-                   gridcolor = "#D0D8E0", zeroline = FALSE),
+                   gridcolor = "#D0D8E0", zeroline = FALSE,
+                   range = y_range, autorange = is.null(y_range)),
       shapes = list(list(type = "line", xref = "paper",
                          x0 = 0, x1 = 1, y0 = 1, y1 = 1,
                          line = list(color = ta_muted, width = 1, dash = "dot"))),

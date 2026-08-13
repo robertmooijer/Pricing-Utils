@@ -23,6 +23,13 @@
 #'   breakdown (exposure-weighted mean change).
 #' @param n_show Number of rows in the winners/losers tables (default 10).
 #' @param exposure_col Exposure column (default `"Exposure"`).
+#' @param x_range,y_range Optional `c(lo, hi)` to fix the axes of the
+#'   returned histogram, so impact plots for different scenarios become
+#'   directly comparable. `x_range` bounds the premium change (%) - the
+#'   axis you normally want to align - and `y_range` the exposure axis.
+#'   Both `NULL` (default) auto-scale. Note that `x_range` only sets the
+#'   visible window; the bins are always computed over the full range of
+#'   changes, so the summary statistics are unaffected.
 #'
 #' @return A list with `summary` (display table with the headline numbers),
 #'   `stats` (the same numbers as a named list), `policy` (per-row
@@ -39,9 +46,13 @@ premium_impact <- function(data,
                            rebase       = TRUE,
                            by           = NULL,
                            n_show       = 10,
-                           exposure_col = "Exposure") {
+                           exposure_col = "Exposure",
+                           x_range      = NULL,
+                           y_range      = NULL) {
 
   old_premium_basis <- match.arg(old_premium_basis)
+  x_range <- .check_range(x_range, "premium_impact", "x_range")
+  y_range <- .check_range(y_range, "premium_impact")
   if (is.null(model_freq_new) && is.null(model_sev_new))
     stop("premium_impact: provide at least one NEW model.")
   has_old_models <- !is.null(model_freq_old) || !is.null(model_sev_old)
@@ -181,9 +192,11 @@ premium_impact <- function(data,
                                           100 * rate_change)),
                     font = list(color = ta_navy, size = 14)),
       xaxis  = list(title = "Premium change (%)", showgrid = FALSE,
-                    zeroline = FALSE),
+                    zeroline = FALSE,
+                    range = x_range, autorange = is.null(x_range)),
       yaxis  = list(title = "Exposure", gridcolor = "#D0D8E0",
-                    zeroline = FALSE),
+                    zeroline = FALSE,
+                    range = y_range, autorange = is.null(y_range)),
       shapes = list(
         list(type = "line", xref = "x", yref = "paper",
              x0 = 0, x1 = 0, y0 = 0, y1 = 1,

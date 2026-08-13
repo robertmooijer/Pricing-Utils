@@ -47,8 +47,7 @@ plot_glm_predictor <- function(model, predictor,
   bin_type <- match.arg(bin_type)
   if (!inherits(model, "glm")) stop("'model' must be a glm object.")
   if (n_bins < 2) stop("plot_glm_predictor: 'n_bins' must be at least 2.")
-  if (!is.null(y_range) && (length(y_range) != 2 || y_range[1] >= y_range[2]))
-    stop("plot_glm_predictor: 'y_range' must be c(lo, hi) with lo < hi.")
+  y_range <- .check_range(y_range, "plot_glm_predictor")
 
   tr            <- .glm_training_data(model, "plot_glm_predictor")
   model_data    <- tr$mf
@@ -192,8 +191,7 @@ plot_glm_predictor <- function(model, predictor,
       title  = list(text = title, font = list(color = ta_navy, size = 14)),
       xaxis  = xaxis_cfg,
       yaxis  = list(title = ylab, gridcolor = "#D0D8E0", zeroline = FALSE,
-                    range = y_range,
-                    autorange = if (is.null(y_range)) TRUE else FALSE),
+                    range = y_range, autorange = is.null(y_range)),
       yaxis2 = list(title = w_title, overlaying = "y", side = "right",
                     showgrid = FALSE,
                     tickfont  = list(color = ta_muted),
