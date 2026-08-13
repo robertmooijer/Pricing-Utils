@@ -34,6 +34,50 @@ snap <- function(p, name, width = 900, height = 460) {
   invisible(png)
 }
 
+# Render a data.frame excerpt as a styled table image, mirroring the
+# highlighting used by export_rating_table(): base row in light blue,
+# thin (low-credibility) rows greyed out and italic.
+snap_table <- function(df, name, digits = 3) {
+  h <- htmltools::tags
+  # Format per column type, as export_rating_table() does: counts with a
+  # thousands separator and no decimals, factors/credibility with decimals.
+  fm <- function(x, nm) {
+    if (is.logical(x)) return(ifelse(x, "TRUE", "FALSE"))
+    if (!is.numeric(x)) return(as.character(x))
+    if (nm %in% c("Exposure", "ClaimCount"))
+      format(round(x), big.mark = ",", scientific = FALSE, trim = TRUE)
+    else formatC(x, format = "f", digits = digits)
+  }
+  rows <- lapply(seq_len(nrow(df)), function(i) {
+    cls <- if (isTRUE(df$IsBase[i])) "base"
+           else if (isTRUE(df$IsThin[i])) "thin" else ""
+    h$tr(class = cls,
+         lapply(seq_along(df), function(j) h$td(fm(df[i, j], names(df)[j]))))
+  })
+  page <- h$div(
+    h$style(htmltools::HTML("
+      body{margin:0;background:#fff;font-family:'Segoe UI',Arial,sans-serif;}
+      .wrap{display:inline-block;padding:14px;}
+      table{border-collapse:collapse;font-size:13px;}
+      th{background:#00365E;color:#fff;padding:7px 11px;text-align:left;
+         white-space:nowrap;}
+      td{border-bottom:1px solid #D0D8E0;padding:6px 11px;white-space:nowrap;}
+      tr.base td{background:#A8C8E0;font-weight:bold;}
+      tr.thin td{color:#999;font-style:italic;}")),
+    h$div(class = "wrap",
+          h$table(h$thead(h$tr(lapply(names(df), h$th))), h$tbody(rows))))
+
+  html <- file.path(tempdir(), "figs", paste0(name, ".html"))
+  dir.create(dirname(html), showWarnings = FALSE, recursive = TRUE)
+  htmltools::save_html(page, html)
+  png <- file.path(out_dir, paste0("README-", name, ".png"))
+  webshot2::webshot(paste0("file://", normalizePath(html, winslash = "/")),
+                    file = png, selector = ".wrap", zoom = 2, delay = 1)
+  cat("written:", png, "-",
+      round(file.info(png)$size / 1024), "KB\n")
+  invisible(png)
+}
+
 # ── Portfolio (same structure as run_demo.R, smaller for speed) ───────
 set.seed(2026)
 n <- 40000
@@ -98,6 +142,19 @@ snap(make_pdp(m_freq, dat, "LEEFTIJD", metric = "Frequency", grid_res = 40),
      "pdp")
 
 snap(make_rating_plot(tbl, "LEEFTIJD"), "rating-factors")
+
+# Categorical variable: BRANDSTOF has a deliberately rare level
+# ("Waterstof"), which make_rating_plot() dims as a thin cell.
+snap(make_rating_plot(tbl, "BRANDSTOF"), "rating-plot-categorical",
+     width = 800)
+
+# The rating table itself, styled like the Excel export
+snap_table(
+  tbl[tbl$Variable == "BRANDSTOF" & is.na(tbl$Group),
+      c("Variable", "Level", "IsBase", "Exposure", "ClaimCount",
+        "Credibility", "IsThin", "Factor_Frequency", "Factor_Severity",
+        "Factor_Premium")],
+  "rating-table")
 
 # The interaction row is named after R's own term ordering (which may
 # differ from the order you typed), so look it up in the table.

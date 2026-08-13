@@ -444,12 +444,20 @@ Inline formula transformations such as `factor(YEAR)` and `ns(AGE, 4)` are
 resolved to their underlying columns; terms whose base variable cannot be
 found in `data` are skipped with a warning rather than crashing the call.
 
+The rows for one categorical variable look like this (base row
+highlighted, thin row greyed out, as in the Excel export). Note the last
+level: 5 claims give it a credibility of 0.07, so its factor of 1.22 rests
+almost entirely on the model structure rather than on its own experience:
+
+![Rating table excerpt](man/figures/README-rating-table.png)
+
 ### `make_rating_plot()`
 
 Plots one variable (or interaction) from a rating table.
 
 ```r
-make_rating_plot(rating_tbl, var, metric_fmt = 4, metric = NULL)
+make_rating_plot(rating_tbl, var, metric_fmt = 4, metric = NULL,
+                 y_range = NULL)
 ```
 
 - **Main effects**: factor curves for Frequency, Severity and Premium on the
@@ -465,6 +473,14 @@ make_rating_plot(rating_tbl, var, metric_fmt = 4, metric = NULL)
   low-credibility factors are visually distinct from well-supported ones.
 
 **Returns** a plotly object.
+
+The same variable as the table above — markers only (categories are never
+connected by a line), with the thin level's markers faded:
+
+![Categorical rating plot](man/figures/README-rating-plot-categorical.png)
+
+For a continuous variable and an interaction, see the
+[Gallery](#gallery).
 
 ### `premium_impact()`
 
