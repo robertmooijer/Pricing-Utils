@@ -322,9 +322,18 @@ Mode is detected automatically:
 - `weight_var` overrides the weight column explicitly (must exist in
   `model$data`; an unknown name is an error, not silently ignored).
 
-Numeric predictors are binned with **quantile bins** by default (each bin has
-roughly the same number of observations, avoiding noisy thin tails);
-`bin_type = "width"` restores equal-width binning.
+**Binning.** A numeric predictor with at most `n_bins` distinct values is
+not binned at all: every value gets its own point, on its exact position.
+That matters for variables like vehicle age or number of claims — binning
+would merge neighbouring values (ages 0 and 1 into one point at, say,
+0.78) and, because equal-width bins span the observed range, a single
+outlier would silently shift every point on the plot.
+
+Only when there are more distinct values than `n_bins` does binning kick
+in: **quantile bins** by default (each bin holds roughly the same number
+of observations, avoiding noisy thin tails), or equal-width bins with
+`bin_type = "width"`. A binned point then sits at the weight-weighted mean
+of the values in its bin, not at the bin edge.
 
 **Shared y-axis across variables.** By default the primary y-axis
 auto-scales to the values of that one plot, so two predictors on very

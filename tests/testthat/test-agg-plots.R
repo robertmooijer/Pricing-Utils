@@ -15,6 +15,39 @@ test_that("plot_glm_predictor returns plotly objects", {
                   "plotly")
 })
 
+test_that("fewer distinct values than n_bins means no binning at all", {
+  obs_x <- function(p) {
+    tr <- Filter(function(t) identical(t$name, "Observed"),
+                 plotly::plotly_build(p)$x$data)[[1]]
+    sort(as.numeric(unlist(tr$x)))
+  }
+  uniq <- sort(unique(dat$LEEFTIJD))          # 63 integer values, 18..80
+
+  # n_bins well above the number of distinct values: exact positions,
+  # including the minimum (the case that used to drift off its own value)
+  p_exact <- plot_glm_predictor(m_freq, "LEEFTIJD", n_bins = 150)
+  expect_equal(obs_x(p_exact), uniq)
+  expect_equal(min(obs_x(p_exact)), min(dat$LEEFTIJD))
+
+  # exactly at the boundary: still unbinned
+  expect_equal(obs_x(plot_glm_predictor(m_freq, "LEEFTIJD",
+                                        n_bins = length(uniq))), uniq)
+
+  # An extreme outlier must not shift the other points; with equal-width
+  # bins it would drag every boundary along
+  d_out <- dat
+  d_out$LEEFTIJD[1] <- 999
+  m_out <- glm(AantalClaims ~ LEEFTIJD + REGIO + offset(log(Exposure)),
+               family = poisson(), data = d_out)
+  x_out <- obs_x(plot_glm_predictor(m_out, "LEEFTIJD", n_bins = 150))
+  expect_true(all(uniq %in% x_out))
+  expect_true(999 %in% x_out)
+
+  # More distinct values than n_bins: binning kicks in, at most n_bins points
+  p_binned <- plot_glm_predictor(m_freq, "LEEFTIJD", n_bins = 10)
+  expect_lte(length(obs_x(p_binned)), 10)
+})
+
 test_that("plot_glm_predictor: y_range is unused by default and fixable", {
   # Default: the axis auto-scales (plotly may still fill in a computed
   # range on build, so assert on autorange, which is the actual switch).

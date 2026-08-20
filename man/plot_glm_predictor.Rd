@@ -25,7 +25,9 @@ plot_glm_predictor(
 
 \item{predictor}{Name of the predictor (string).}
 
-\item{n_bins}{Number of bins for numeric predictors (default 150).}
+\item{n_bins}{Maximum number of points for a numeric predictor
+(default 150). Predictors with at most this many distinct values are
+shown unbinned, one point per value.}
 
 \item{weight_var}{Optional: weight/exposure column in \code{model$data}
 (override; an unknown name is an error).}
@@ -62,7 +64,11 @@ observed and predicted frequency per bin. Otherwise (the typical severity
 model) the response is already an average and prior-weight-weighted means
 are shown per bin.
 
-Numeric predictors are binned with quantile bins by default (each bin
-holds roughly the same number of observations, avoiding noisy thin
-tails); \code{bin_type = "width"} restores equal-width binning.
+A numeric predictor with at most \code{n_bins} distinct values is \strong{not
+binned at all}: every value gets its own point, on its exact position.
+Only when there are more distinct values than \code{n_bins} is binning
+applied — with quantile bins by default (each bin holds roughly the
+same number of observations, avoiding noisy thin tails), or equal-width
+bins with \code{bin_type = "width"}. A binned point sits at the
+weight-weighted mean of the values in its bin, not at the bin edge.
 }

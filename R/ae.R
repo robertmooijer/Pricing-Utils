@@ -10,13 +10,19 @@
 #' model) the response is already an average and prior-weight-weighted means
 #' are shown per bin.
 #'
-#' Numeric predictors are binned with quantile bins by default (each bin
-#' holds roughly the same number of observations, avoiding noisy thin
-#' tails); `bin_type = "width"` restores equal-width binning.
+#' A numeric predictor with at most `n_bins` distinct values is **not
+#' binned at all**: every value gets its own point, on its exact position.
+#' Only when there are more distinct values than `n_bins` is binning
+#' applied — with quantile bins by default (each bin holds roughly the
+#' same number of observations, avoiding noisy thin tails), or equal-width
+#' bins with `bin_type = "width"`. A binned point sits at the
+#' weight-weighted mean of the values in its bin, not at the bin edge.
 #'
 #' @param model A fitted glm object.
 #' @param predictor Name of the predictor (string).
-#' @param n_bins Number of bins for numeric predictors (default 150).
+#' @param n_bins Maximum number of points for a numeric predictor
+#'   (default 150). Predictors with at most this many distinct values are
+#'   shown unbinned, one point per value.
 #' @param weight_var Optional: weight/exposure column in `model$data`
 #'   (override; an unknown name is an error).
 #' @param weight_label Optional: axis title for the bars.
@@ -100,7 +106,16 @@ plot_glm_predictor <- function(model, predictor,
 
   # Grouping
   if (is.numeric(df$x_var)) {
-    if (bin_type == "quantile") {
+    x_binned <- length(unique(df$x_var[!is.na(df$x_var)])) > n_bins
+    if (!x_binned) {
+      # Fewer distinct values than requested bins: do not bin at all. One
+      # point per observed value, positioned on that exact value. Binning
+      # here would merge neighbouring values (e.g. vehicle ages 0 and 1)
+      # into a single point at their weighted mean, and because cut()
+      # spans the observed range, a single outlier would silently shift
+      # every point.
+      df$bin_group <- factor(df$x_var)
+    } else if (bin_type == "quantile") {
       # Quantile bins: each bin holds ~equally many observations, so thin
       # tails do not produce a noisy "observed" line.
       brks <- unique(stats::quantile(df$x_var,
@@ -119,6 +134,7 @@ plot_glm_predictor <- function(model, predictor,
     df$x_var     <- as.factor(df$x_var)
     df$bin_group <- df$x_var
     x_is_numeric <- FALSE
+    x_binned     <- FALSE
   }
 
   # Aggregation:
@@ -127,7 +143,12 @@ plot_glm_predictor <- function(model, predictor,
   agg <- df %>%
     group_by(bin_group) %>%
     summarise(
-      x_plot        = if (x_is_numeric) weighted.mean(x_var, weight) else dplyr::first(as.character(x_var)),
+      # Binned: the weighted mean position within the bin. Unbinned: the
+      # value itself (first() rather than a mean, so a group with zero
+      # total weight still gets its exact position instead of NaN).
+      x_plot        = if (!x_is_numeric) dplyr::first(as.character(x_var))
+                      else if (x_binned) weighted.mean(x_var, weight)
+                      else dplyr::first(x_var),
       avg_observed  = if (use_rate) sum(observed)  / sum(weight) else weighted.mean(observed,  weight),
       avg_predicted = if (use_rate) sum(predicted) / sum(weight) else weighted.mean(predicted, weight),
       weight_sum    = sum(weight),
