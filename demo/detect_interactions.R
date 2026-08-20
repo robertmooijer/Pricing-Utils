@@ -96,3 +96,21 @@ cat(sprintf("Out-of-sample deviance  without: %.0f\n                        with
 cat("\nA candidate only counts if it improves out-of-sample fit AND the\n",
     "resulting factor pattern is explainable. The scan proposes; the GLM decides.\n",
     sep = "")
+
+# --- 5. The other direction: screening candidates ---------------------
+# Same offset trick, different question. Here the baseline deliberately
+# omits GEWICHT, and two useless columns are thrown in to see whether the
+# screen keeps them out.
+if (requireNamespace("xgboost", quietly = TRUE)) {
+  cat("\n── screen_features() ────────────────────\n")
+  dat$KLEUR <- factor(sample(letters[1:8], n, TRUE))   # noise
+  dat$RUIS  <- round(rnorm(n), 2)                      # noise
+  m_min <- glm(AantalClaims ~ ns(LEEFTIJD, 5) + REGIO + offset(log(Exposure)),
+               family = poisson(), data = dat)
+  sc <- suppressWarnings(screen_features(m_min, seed = 1, n_shap = 0))
+  print(sc$summary, row.names = FALSE)
+  cat("\n"); print(sc$features, row.names = FALSE)
+  cat("\nGEWICHT and BOEKJAAR carry signal the baseline lacks; KLEUR and\n",
+      "RUIS should sit at or below zero. Note Gain flattering the noise.\n",
+      sep = "")
+}

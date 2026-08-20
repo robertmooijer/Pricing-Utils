@@ -32,6 +32,7 @@ on a secondary axis, horizontal legends) and export to PNG via the plotly mode b
   - [`plot_glm_residuals()`](#plot_glm_residuals)
   - [`detect_interactions()`](#detect_interactions)
   - [`plot_residual_heatmap()`](#plot_residual_heatmap)
+  - [`screen_features()`](#screen_features)
   - [`make_rating_table()`](#make_rating_table)
   - [`make_rating_plot()`](#make_rating_plot)
   - [`premium_impact()`](#premium_impact)
@@ -50,7 +51,8 @@ on a secondary axis, horizontal legends) and export to PNG via the plotly mode b
 - Hard dependencies (installed automatically): `dplyr`, `ggplot2`, `plotly`,
   `data.table`
 - Optional: `openxlsx` (only for `export_rating_table()`); `htmltools`
-  (only for `pricing_report()`, installed automatically with plotly)
+  (only for `pricing_report()`, installed automatically with plotly);
+  `xgboost` (only for `screen_features()`)
 
 ## Getting started
 
@@ -473,6 +475,72 @@ check on this model is spotless:
   plot. Their volume is still in the tooltip.
 - The cell table (groups, actual, expected, A/E, exposure, claims, thin
   flag) is attached to the returned plot as the `"cells"` attribute.
+
+### `screen_features()`
+
+Fits a boosted challenger with the GLM as an offset, so it can only model
+what the GLM leaves behind. Requires `xgboost` (in `Suggests`).
+
+```r
+screen_features(model, features = NULL, split = c(0.6, 0.2, 0.2),
+                max_depth = 2, eta = 0.05, nrounds = 2000,
+                early_stopping_rounds = 40, n_shap = 4000,
+                cor_threshold = 0.95, max_levels = 50, seed = NULL)
+```
+
+The baseline you pass decides which question it answers. With a **minimal
+model** it screens candidates *before* you choose what goes into the
+tariff — "what does this data add on top of what I already price on".
+With your **full model** it asks what the finished tariff still misses.
+The baseline is refitted on the training split, so both sides of the
+comparison are out of sample. No scorable model is returned.
+
+```
+$summary
+                                     Stage Deviance Change
+                              baseline GLM    16720
+        + booster, depth 1 (additive only)    16650 -0.41%
+ + booster, depth 2 (may use interactions)    16653 +0.02%
+
+$features
+       Feature InModel PermDeviance   Gain
+   KILOMETRAGE   FALSE        66.83 0.4291
+       GEWICHT   FALSE        16.78 0.1460
+ GEWICHT_PROXY   FALSE        14.21 0.2058
+         KLEUR   FALSE         3.04 0.0414
+      LEEFTIJD    TRUE         0.64 0.0381
+         REGIO    TRUE        -0.14 0.0045
+          RUIS   FALSE        -3.57 0.1351
+```
+
+Three things to read carefully:
+
+- **The verdict is staged.** While the depth-1 step still improves the
+  fit, main effects are missing and the interaction ranking cannot be
+  trusted. Fix the main effects, then run again.
+- **Rank on `PermDeviance`, not `Gain`.** `PermDeviance` is the increase
+  in out-of-sample deviance when the feature is shuffled with the baseline
+  held fixed, so it is the *incremental* contribution; at or below zero
+  means no usable signal. `Gain` is biased towards continuous and
+  high-cardinality features — in the run above it gives pure noise
+  (`RUIS`) a 13.5% share while the permutation test correctly puts it at
+  −3.57.
+- **Near-duplicates split their importance.** `GEWICHT` and
+  `GEWICHT_PROXY` each get roughly half, and which one comes out on top is
+  arbitrary. Pairs above `cor_threshold` are listed in `$correlated` with
+  a warning.
+
+Also returns `$interactions` (SHAP ranking), `$stats` and `$plot`.
+
+> **Sensitivity.** A booster is *less* sensitive to a two-way interaction
+> between known rating factors than
+> [`detect_interactions()`](#detect_interactions): the cell-based test
+> concentrates the signal into one statistic with a known null, while the
+> booster must discover the split structure and pays a variance cost for
+> its flexibility. On the same data, a case where the cell test reaches
+> Z = 7.7 can leave the booster reporting nothing at all. Use this
+> function to screen features and for the global verdict; use
+> `detect_interactions()` to hunt interactions.
 
 ### `make_rating_table()`
 
