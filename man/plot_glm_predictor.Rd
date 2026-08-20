@@ -67,7 +67,7 @@ are shown per bin.
 A numeric predictor with at most \code{n_bins} distinct values is \strong{not
 binned at all}: every value gets its own point, on its exact position.
 Only when there are more distinct values than \code{n_bins} is binning
-applied — with quantile bins by default (each bin holds roughly the
+applied: with quantile bins by default (each bin holds roughly the
 same number of observations, avoiding noisy thin tails), or equal-width
 bins with \code{bin_type = "width"}. A binned point sits at the
 weight-weighted mean of the values in its bin, not at the bin edge.

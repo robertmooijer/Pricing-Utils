@@ -32,6 +32,7 @@ utils::globalVariables(c(
   "Factor_Frequency", "Factor_Severity", "Factor_Premium",
   "Uplift_Frequency", "Uplift_Severity", "Uplift_Premium",
   "bin", "bin_group", "x", "r", "x_var", "x_plot",
+  "gx", "gy", "a", "e", "expo", "clm", "AE", "Actual", "Expected", "Claims",
   "observed", "predicted", "weight", "weight_sum",
   "avg_observed", "avg_predicted", "mean_r", "band",
   "E", "C", "w", "ch"

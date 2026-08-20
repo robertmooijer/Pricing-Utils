@@ -165,6 +165,28 @@ snap(make_rating_plot(tbl, ivar, metric = "Premium"), "interaction")
 
 snap(plot_glm_residuals(m_freq), "residuals")
 
+# Interaction scan. Cell-level analysis needs volume: the portfolio above
+# has ~3k claims, which spread over 60 cells is mostly noise. So this
+# figure uses a bigger portfolio, with the model deliberately fitted
+# WITHOUT the interaction that is in the data.
+set.seed(7)
+n2 <- 400000
+d2 <- data.frame(
+  LEEFTIJD = round(runif(n2, 18, 80)),
+  REGIO    = factor(sample(c("Stad", "Rand", "Dorp", "Platteland"), n2, TRUE,
+                           prob = c(.30, .25, .25, .20))),
+  Exposure = round(runif(n2, 0.1, 1), 3))
+jong2 <- pmax(0, 30 - d2$LEEFTIJD)
+lin2  <- -1.9 + 0.025 * jong2 + 0.010 * pmax(0, d2$LEEFTIJD - 65) +
+  c(Stad = .25, Rand = .10, Dorp = .05, Platteland = 0)[as.character(d2$REGIO)] +
+  0.050 * jong2 * (d2$REGIO == "Stad")          # the missing interaction
+d2$AantalClaims <- rpois(n2, d2$Exposure * exp(lin2))
+
+m_gap <- glm(AantalClaims ~ ns(LEEFTIJD, 5) + REGIO + offset(log(Exposure)),
+             family = poisson(), data = d2)
+snap(plot_residual_heatmap(m_gap, "LEEFTIJD", "REGIO", n_bins = 10),
+     "residual-heatmap", width = 800)
+
 imp <- premium_impact(dat, model_freq_new = m_freq, model_sev_new = m_sev,
                       old_premium_col = "HUIDIGE_PREMIE",
                       by = c("REGIO", "BRANDSTOF"))

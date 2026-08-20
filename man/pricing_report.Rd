@@ -11,8 +11,9 @@ pricing_report(
   file = "pricing_report.html",
   title = "GLM Pricing Report",
   variables = NULL,
-  include = c("diagnostics", "oneway", "ae", "pdp", "rating"),
+  include = c("diagnostics", "oneway", "ae", "pdp", "rating", "interactions"),
   by_year = FALSE,
+  top_interactions = 3,
   exposure_col = "Exposure",
   claims_col = "AantalClaims",
   loss_col = "SCHADELAST",
@@ -35,9 +36,14 @@ pricing_report(
 variables of both models).}
 
 \item{include}{Which blocks to render: any of \code{"diagnostics"},
-\code{"oneway"}, \code{"ae"}, \code{"pdp"}, \code{"rating"} (default: all).}
+\code{"oneway"}, \code{"ae"}, \code{"pdp"}, \code{"rating"}, \code{"interactions"} (default:
+all). The \code{"interactions"} block runs \code{\link[=detect_interactions]{detect_interactions()}} on the
+frequency model and plots the strongest pairs as A/E heatmaps.}
 
 \item{by_year}{Split the one-way plots by accounting year.}
+
+\item{top_interactions}{Number of pairs from the interaction scan to
+plot as heatmaps (default 3).}
 
 \item{exposure_col, claims_col, loss_col, year_col}{Column names, see
 \code{\link[=agg_all]{agg_all()}}.}

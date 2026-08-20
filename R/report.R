@@ -19,8 +19,12 @@
 #' @param variables Which variables get a section (default: all base
 #'   variables of both models).
 #' @param include Which blocks to render: any of `"diagnostics"`,
-#'   `"oneway"`, `"ae"`, `"pdp"`, `"rating"` (default: all).
+#'   `"oneway"`, `"ae"`, `"pdp"`, `"rating"`, `"interactions"` (default:
+#'   all). The `"interactions"` block runs [detect_interactions()] on the
+#'   frequency model and plots the strongest pairs as A/E heatmaps.
 #' @param by_year Split the one-way plots by accounting year.
+#' @param top_interactions Number of pairs from the interaction scan to
+#'   plot as heatmaps (default 3).
 #' @param exposure_col,claims_col,loss_col,year_col Column names, see
 #'   [agg_all()].
 #' @param grid_res,base_level,trim Passed to [make_pdp()] /
@@ -33,8 +37,9 @@ pricing_report <- function(model_freq = NULL, model_sev = NULL, data,
                            title = "GLM Pricing Report",
                            variables = NULL,
                            include = c("diagnostics", "oneway", "ae",
-                                       "pdp", "rating"),
+                                       "pdp", "rating", "interactions"),
                            by_year = FALSE,
+                           top_interactions = 3,
                            exposure_col = "Exposure",
                            claims_col   = "AantalClaims",
                            loss_col     = "SCHADELAST",
@@ -190,11 +195,41 @@ pricing_report <- function(model_freq = NULL, model_sev = NULL, data,
           h$h3(iv), safe(make_rating_plot(tbl, iv)))))
   }
 
+  # Interaction scan: cell-level structure the one-way checks cannot see
+  scan_sec <- NULL
+  if ("interactions" %in% include) {
+    scan_model <- if (!is.null(model_freq)) model_freq else model_sev
+    scan <- tryCatch(
+      detect_interactions(scan_model, n_bins = 10, n_sim = 100),
+      error = function(e) {
+        warning("pricing_report: interaction scan failed: ",
+                conditionMessage(e), call. = FALSE)
+        NULL
+      })
+    if (!is.null(scan) && nrow(scan)) {
+      top  <- utils::head(scan, top_interactions)
+      show <- scan[, c("VarX", "VarY", "Claims", "Z", "P", "MaxAE",
+                       "MaxAE_ExposureShare")]
+      scan_sec <- htmltools::tagList(
+        h$h2(id = "interaction-scan", "Interaction scan"),
+        h$p(class = "ta-meta",
+            "Ranked by signal (Z) against a simulated no-interaction null. ",
+            "MaxAE is the A/E of the worst cell with enough claims, and is ",
+            "the column to judge materiality on."),
+        html_table(show),
+        lapply(seq_len(nrow(top)), function(i) htmltools::tagList(
+          h$h3(paste(top$VarX[i], "\u00d7", top$VarY[i])),
+          safe(plot_residual_heatmap(scan_model, top$VarX[i], top$VarY[i])))))
+    }
+  }
+
   toc <- h$p(class = "ta-toc",
              if ("diagnostics" %in% include)
                h$a(href = "#diagnostics", "Diagnostics"),
              lapply(variables, function(v)
                h$a(href = paste0("#var-", anchor(v)), v)),
+             if (!is.null(scan_sec))
+               h$a(href = "#interaction-scan", "Interaction scan"),
              if (!is.null(int_sec)) h$a(href = "#interactions", "Interactions"))
 
   page <- h$div(class = "ta-wrap", css,
@@ -205,7 +240,7 @@ pricing_report <- function(model_freq = NULL, model_sev = NULL, data,
                            " rows")),
                 fml(model_freq, "Frequency model"),
                 fml(model_sev,  "Severity model"),
-                toc, diag_sec, var_secs, int_sec)
+                toc, diag_sec, var_secs, scan_sec, int_sec)
 
   libdir <- paste0(sub("\\.html?$", "", basename(file)), "_files")
   htmltools::save_html(page, file = file, libdir = libdir)

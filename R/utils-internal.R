@@ -60,6 +60,58 @@
   setdiff(all.vars(f), all.vars(f[[2]]))
 }
 
+# Actual and expected per fitted row, on a scale where A/E is meaningful.
+# Offset model with log link (typical frequency): actual and expected are
+# counts. Otherwise (typical severity): actual and expected are weighted
+# totals, so the ratio is the weighted-mean ratio.
+.glm_ae_parts <- function(model, fn = "pricingtoolsRmO") {
+  tr <- .glm_training_data(model, fn)
+  y  <- as.numeric(tr$mf[[1]])
+  mu <- as.numeric(predict(model, type = "response"))
+  has_offset <- !is.null(tr$offset) && any(tr$offset != 0)
+
+  if (has_offset && identical(family(model)$link, "log")) {
+    c(tr, list(actual = y, expected = mu, exposure = exp(tr$offset),
+               claims = y, exposure_label = "Exposure", counts = TRUE))
+  } else {
+    w <- tr$weights
+    c(tr, list(actual = w * y, expected = w * mu, exposure = w,
+               claims = w, exposure_label = "Weight", counts = FALSE))
+  }
+}
+
+# Values of one variable, aligned with the model's fitted rows
+.glm_var_values <- function(parts, var, fn) {
+  if (var %in% names(parts$mf)) return(parts$mf[[var]])
+  if (!is.null(parts$data) && var %in% names(parts$data))
+    return(parts$data[[var]])
+  stop(fn, ": variable '", var, "' not found in the model data. It must be ",
+       "a column of the data the model was fitted on.", call. = FALSE)
+}
+
+# Group a vector for cell-wise summaries: categorical as is, numeric with
+# at most n_bins distinct values on its exact values, otherwise quantile
+# bins (so cells hold a comparable number of observations).
+.group_values <- function(x, n_bins) {
+  if (!is.numeric(x)) return(factor(x))
+  u <- sort(unique(x[!is.na(x)]))
+  if (length(u) <= n_bins) return(factor(x, levels = u))
+  brks <- unique(stats::quantile(x, probs = seq(0, 1, length.out = n_bins + 1),
+                                 na.rm = TRUE, names = FALSE))
+  if (length(brks) < 2) brks <- range(x, na.rm = TRUE) + c(-0.5, 0.5)
+  cut(x, breaks = brks, include.lowest = TRUE, dig.lab = 4)
+}
+
+# Variables appearing in the model's offset term, e.g. "Exposure" in
+# offset(log(Exposure)); never candidates for an interaction scan.
+.offset_vars <- function(model) {
+  tt  <- terms(model)
+  idx <- attr(tt, "offset")
+  if (is.null(idx) || !length(idx)) return(character(0))
+  vars <- attr(tt, "variables")
+  unique(unlist(lapply(idx, function(i) all.vars(vars[[i + 1L]]))))
+}
+
 # Underlying column of a term label: "ns(AGE, 4)" -> "AGE"
 .term_base_var <- function(term, data) {
   if (term %in% names(data)) return(term)

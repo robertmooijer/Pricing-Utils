@@ -5,8 +5,9 @@
 An R package for **GLM-based non-life insurance pricing analysis**. It covers the
 standard workflow around a frequency/severity model pair: one-way exploration,
 actual-vs-expected checks, partial dependence plots, model diagnostics
-(dispersion, binned residuals), the construction of a multiplicative
-rating table with thin-cell flags, premium-impact (dislocation) analysis,
+(dispersion, binned residuals, interaction detection), the construction of a
+multiplicative rating table with thin-cell flags, premium-impact (dislocation)
+analysis,
 and deliverables — a formatted Excel rating workbook and a one-call HTML
 report — all with interactive plotly visualisations.
 
@@ -29,6 +30,8 @@ on a secondary axis, horizontal legends) and export to PNG via the plotly mode b
   - [`plot_glm_predictor()`](#plot_glm_predictor)
   - [`glm_diagnostics()`](#glm_diagnostics)
   - [`plot_glm_residuals()`](#plot_glm_residuals)
+  - [`detect_interactions()`](#detect_interactions)
+  - [`plot_residual_heatmap()`](#plot_residual_heatmap)
   - [`make_rating_table()`](#make_rating_table)
   - [`make_rating_plot()`](#make_rating_plot)
   - [`premium_impact()`](#premium_impact)
@@ -404,6 +407,73 @@ bars per level instead of a ribbon.
 
 ![Binned residual plot](man/figures/README-residuals.png)
 
+### `detect_interactions()`
+
+Scans every two-way combination of variables and ranks them by the
+interaction structure the GLM has not captured.
+
+```r
+detect_interactions(model, vars = NULL, n_bins = 10, min_claims = 30,
+                    n_sim = 200, top_n = NULL, seed = NULL)
+```
+
+For each pair it builds the two-way table of actual versus expected
+claims, matches the row and column margins by **iterative proportional
+fitting** — so main-effect misfit (a spline needing another knot, a level
+that is simply mispriced) is scaled away first — and takes the remaining
+deviance as the statistic. That is the likelihood-ratio test between the
+additive and the saturated model on the table.
+
+Because that deviance is unreliable in sparse tables, the reference
+distribution comes from **simulation** rather than chi-square asymptotics
+whenever the model is a Poisson count model: claims are resampled from the
+raked expected values under the additive null, `n_sim` times. Other
+families fall back to the dispersion-scaled chi-square (reported in the
+`Method` column).
+
+`vars` defaults to the model's own predictors, but you can pass variables
+that are *not* in the model — which is how a completely omitted rating
+factor surfaces.
+
+**Returns** a data.frame, strongest first: `VarX`, `VarY`, `Cells`,
+`Claims`, `Deviance`, `DF`, `Z`, `P`, `Method`, `MaxAE`, `MaxAE_Claims`,
+`MaxAE_ExposureShare`.
+
+> The ranking is by statistical signal (`Z`), which is not the same as
+> materiality. Judge the two separately: `MaxAE` is the A/E of the worst
+> cell that has enough claims, and `MaxAE_ExposureShare` says how much of
+> the portfolio sits in it.
+
+### `plot_residual_heatmap()`
+
+The A/E ratio per cell of two variables — the view that shows *where* a
+model leaks.
+
+```r
+plot_residual_heatmap(model, var_x, var_y, n_bins = 20,
+                      min_claims = 30, z_range = NULL, title = NULL)
+```
+
+Below, a frequency GLM with clean main effects for age and region but no
+interaction between them. Young drivers in the city are underpriced by
+27% while the same age group elsewhere is overpriced — and every one-way
+check on this model is spotless:
+
+![Residual heatmap](man/figures/README-residual-heatmap.png)
+
+- Values come from the model's own rows, so they always align with the
+  fitted values; both variables must be columns of the data the model was
+  fitted on.
+- The colour scale is **diverging around 1.0** — blue overpriced, red
+  underpriced, neutral grey at break-even. `z_range` fixes it across
+  several heatmaps.
+- Cells with fewer than `min_claims` claims are **left blank and marked
+  with a grey cross** rather than coloured: in a thin cell the A/E is
+  mostly noise, and colouring it would make it the loudest thing on the
+  plot. Their volume is still in the tooltip.
+- The cell table (groups, actual, expected, A/E, exposure, claims, thin
+  flag) is attached to the returned plot as the `"cells"` attribute.
+
 ### `make_rating_table()`
 
 Builds a table of multiplicative rating factors from a frequency and/or
@@ -554,8 +624,9 @@ pricing_report(model_freq = NULL, model_sev = NULL, data,
                file = "pricing_report.html",
                title = "GLM Pricing Report",
                variables = NULL,
-               include = c("diagnostics", "oneway", "ae", "pdp", "rating"),
-               by_year = FALSE, grid_res = 50,
+               include = c("diagnostics", "oneway", "ae", "pdp", "rating",
+                           "interactions"),
+               by_year = FALSE, top_interactions = 3, grid_res = 50,
                base_level = c("first", "exposure"), trim = c(0, 1), ...)
 ```
 
@@ -563,8 +634,10 @@ The report contains the diagnostics table with binned residual plots, and —
 per variable (default: all base variables of both models) — the one-way
 observed plot, actual vs expected (frequency and severity), partial
 dependence and the rating-factor plot, plus a section with all interaction
-plots. Individual plot failures are shown as a note instead of aborting the
-report.
+plots. The `"interactions"` block additionally runs
+[`detect_interactions()`](#detect_interactions) and plots the strongest
+`top_interactions` pairs as A/E heatmaps. Individual plot failures are
+shown as a note instead of aborting the report.
 
 It is built with `htmltools` (no pandoc needed); all plots remain fully
 interactive. Next to the `.html` a `<name>_files/` folder is written with
@@ -625,6 +698,38 @@ aggregates counts and exposure before dividing (`Σ observed / Σ exposure` vs
 `Σ predicted / Σ exposure`); for weighted models it uses prior-weight-weighted
 means. Quantile binning keeps each bin credible instead of leaving near-empty
 tail bins that look like misfit but are noise.
+
+### Why a one-way check cannot see an interaction
+
+This is not a matter of bad luck or too little data — it is structural.
+For a canonical link, the score equations of the GLM force the fitted
+totals to equal the observed totals for **every column of the design
+matrix**. So for a categorical variable that is in the model, the A/E is
+exactly 1.000 at every level, no matter what happens inside the cells:
+
+```
+A/E per REGIO:   Dorp 1.0000   Platteland 1.0000   Rand 1.0000   Stad 1.0000
+```
+
+A missing interaction cancels out in the margins by construction. No
+amount of one-way plotting will reveal it, and an actual-vs-expected plot
+per predictor will look perfect while whole cells of the portfolio are
+mispriced by tens of percent. That is precisely the blind spot
+[`detect_interactions()`](#detect_interactions) and
+[`plot_residual_heatmap()`](#plot_residual_heatmap) exist to cover.
+
+Two things to keep in mind when acting on what they find:
+
+- **A candidate is a hypothesis, not a conclusion.** It only counts if
+  adding the term to the GLM improves out-of-sample fit, the resulting
+  factor pattern is explainable, and it holds up in another accounting
+  year. The scan proposes; the GLM decides.
+- **Beware of proxies and mix.** A detected `A × B` can be standing in for
+  an unmodelled `C`, and an "interaction" with the accounting year is
+  usually portfolio mix or trend rather than risk structure.
+
+`demo/detect_interactions.R` walks through the whole cycle on a simulated
+portfolio where the true interaction is known.
 
 ### Thin cells
 
@@ -688,7 +793,10 @@ column names, the non-log-link warning, the overdispersion warning, binned
 residuals staying within the ±2·SE band for a correct model, the
 thin-cell flag, zero dislocation for identical models and
 exact rebase behaviour in `premium_impact()`, the Excel workbook structure,
-and the generated HTML report. Run it with:
+and the generated HTML report. For the interaction tools it simulates a
+portfolio with a *known* missing interaction and checks that
+`detect_interactions()` ranks the true pair first — and that a portfolio
+without any interaction produces no signal. Run it with:
 
 ```r
 devtools::test()        # or:
@@ -705,12 +813,19 @@ deliberately rare fuel type to show the thin-cell flags, and a real
 age x region interaction) and writes every deliverable: the HTML report,
 the Excel rating workbook and the impact analysis.
 
+`demo/detect_interactions.R` simulates a portfolio where young drivers are
+extra risky in the city, fits a GLM *without* that interaction, and walks
+through the full cycle: the one-way checks coming back clean, the scan
+ranking the true pair far above the rest, the heatmap showing which cells
+are mispriced, and the out-of-sample deviance confirming the fix.
+
 `demo/make_readme_figures.R` regenerates the PNGs in `man/figures/` used
 above, by rendering the plotly widgets in headless Chrome (requires
-`webshot2` and a Chrome installation). Run both from the project root:
+`webshot2` and a Chrome installation). Run them from the project root:
 
 ```sh
 Rscript demo/run_demo.R
+Rscript demo/detect_interactions.R
 Rscript demo/make_readme_figures.R
 ```
 
