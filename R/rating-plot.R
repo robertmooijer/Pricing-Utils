@@ -23,7 +23,8 @@
 make_rating_plot <- function(rating_tbl, var, metric_fmt = 4, metric = NULL,
                              y_range = NULL) {
 
-  y_range <- .check_range(y_range, "make_rating_plot")
+  y_range    <- .check_range(y_range, "make_rating_plot")
+  rating_tbl <- .as_df(rating_tbl)
   d <- rating_tbl[rating_tbl$Variable == var, , drop = FALSE]
   if (nrow(d) == 0) stop("Variable '", var, "' not found.")
 

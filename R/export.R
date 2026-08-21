@@ -22,6 +22,7 @@ export_rating_table <- function(rating_tbl, file = "rating_table.xlsx",
          "(install.packages(\"openxlsx\")).", call. = FALSE)
   .check_cols(rating_tbl, c("Variable", "Level", "Group", "IsBase"),
               "export_rating_table")
+  rating_tbl <- .as_df(rating_tbl)
 
   st_header <- openxlsx::createStyle(fontColour = "#FFFFFF", fgFill = ta_navy,
                                      textDecoration = "bold")

@@ -54,3 +54,28 @@ test_that("make_rating_table accepts data.table input", {
   expect_true(all(c("LEEFTIJD", "REGIO") %in% tb$Variable))
   expect_true(any(tb$IsBase))
 })
+
+test_that("a rating table converted by the user still exports and plots", {
+  # export_rating_table() selects columns by name, which is the same trap
+  tb <- make_rating_table(m_dt, NULL, data = ddt)
+  for (conv in list(data.table::as.data.table, tibble::as_tibble)) {
+    tb2 <- conv(tb)
+    expect_s3_class(make_rating_plot(tb2, "REGIO"), "plotly")
+    f <- file.path(tempdir(), "conv.xlsx")
+    expect_silent(export_rating_table(tb2, f))
+    expect_true(file.exists(f))
+  }
+})
+
+test_that("tibble input works throughout", {
+  skip_if_not_installed("tibble")
+  dtb <- tibble::as_tibble(as.data.frame(ddt))
+  m_tb <- glm(AantalClaims ~ LEEFTIJD + REGIO + offset(log(Exposure)),
+              family = poisson(), data = dtb)
+  expect_s3_class(make_pdp(m_tb, dtb, "REGIO"), "plotly")
+  expect_s3_class(plot_residual_heatmap(m_tb, "LEEFTIJD", "REGIO", n_bins = 6),
+                  "plotly")
+  imp <- premium_impact(dtb, model_freq_new = m_tb, model_freq_old = m_tb,
+                        by = "REGIO")
+  expect_lt(max(abs(imp$policy$ChangePct)), 1e-8)
+})
