@@ -39,8 +39,10 @@ on a secondary axis, horizontal legends) and export to PNG via the plotly mode b
   - [`export_rating_table()`](#export_rating_table)
   - [`pricing_report()`](#pricing_report)
 - [Actuarial methodology](#actuarial-methodology)
+  - [Methods at a glance](#methods-at-a-glance) — every function in one table
 - [Input validation and warnings](#input-validation-and-warnings)
 - [Tests](#tests)
+- [Demo and figures](#demo-and-figures)
 - [Known limitations](#known-limitations)
 
 ---
@@ -714,6 +716,42 @@ the JavaScript dependencies — keep the two together when sharing.
 ---
 
 ## Actuarial methodology
+
+The [function reference](#function-reference) above covers *how to use* each
+function and how to read its output. This section covers *why* things are
+computed the way they are — the reasoning you would want before putting a
+number in front of a pricing committee.
+
+### Methods at a glance
+
+One line per function: what it computes, the expression behind it, and the
+assumption it relies on. `y` is the response, `μ` the fitted value, `w` the
+exposure or prior weight, `a` and `e` actual and expected claims in a cell.
+
+| Function | Computes | Key expression | Relies on |
+|---|---|---|---|
+| [`agg_all()`](#agg_all) | frequency and severity per level | `Σclaims / Σexposure` and `Σloss / Σclaims` | — |
+| [`make_plot()`](#make_plot) | the observed one-way | as above, per level of one variable | — |
+| [`plot_glm_predictor()`](#plot_glm_predictor) | actual vs expected per bin | counts: `Σy/Σw` against `Σμ/Σw`; weighted models: prior-weight-weighted means | log link, to recover exposure as `exp(offset)` |
+| [`make_pdp()`](#make_pdp) | the partial effect on the response scale | weighted mean of `predict(type = "response")` per grid point, exposure set to 1 → [why](#why-the-pdp-is-computed-on-the-response-scale) | offset is `log(exposure)` |
+| [`glm_diagnostics()`](#glm_diagnostics) | fit and dispersion | Pearson `χ²/df`; `1 − D/D₀` | → [overdispersion](#overdispersion) |
+| [`plot_glm_residuals()`](#plot_glm_residuals) | binned residuals | mean residual per bin, band `±2·√(φ/n)` | the dispersion estimate `φ` |
+| [`detect_interactions()`](#detect_interactions) | interaction structure the GLM missed | `D = 2·Σ[a·log(a/e*) − (a − e*)]`, where `e*` is `e` raked to `a`'s margins; null by simulation → [why](#why-a-one-way-check-cannot-see-an-interaction) | Poisson counts (otherwise `χ²` scaled by `φ`) |
+| [`plot_residual_heatmap()`](#plot_residual_heatmap) | A/E per cell | `Σa / Σe` per cell of two variables | — |
+| [`screen_features()`](#screen_features) | incremental value of a candidate | increase in out-of-sample deviance when the feature is shuffled, baseline margin held fixed | a holdout split; log link |
+| [`make_rating_table()`](#make_rating_table) | multiplicative relativities | `pred(level, rest at base) / pred(base)`; interaction uplift `joint / (mainₓ · main_g)` → [why](#multiplicative-rating-and-the-reconstruction-identity) | log link |
+| [`make_rating_plot()`](#make_rating_plot) | those relativities, plotted | — | → [thin cells](#thin-cells) |
+| [`premium_impact()`](#premium_impact) | dislocation against the current tariff | `new/old − 1` per policy, optionally rebased so the totals match | log link, to price at exposure = 1 |
+| [`export_rating_table()`](#export_rating_table) / [`pricing_report()`](#pricing_report) | deliverables | — | — |
+
+Two assumptions run through almost the whole table and are worth stating
+once. **The log link** is what makes relativities multiplicative and lets
+`exp(offset)` be read back as exposure; a different link makes several of
+these numbers something other than what their names suggest, which is why
+the functions warn about it. **Exposure weighting** is done by summing
+numerator and denominator separately (`Σa / Σe`), never by averaging
+ratios — an average of ratios would give a policy with a month of exposure
+the same say as one with a full year.
 
 ### Multiplicative rating and the reconstruction identity
 
