@@ -62,6 +62,7 @@ make_rating_table <- function(model_freq = NULL,
     stop("Provide at least one model.")
   }
   .check_cols(data, c(exposure_col, claims_col), "make_rating_table")
+  data <- .as_df(data)
   if (length(trim) != 2 || any(trim < 0) || any(trim > 1) || trim[1] >= trim[2])
     stop("make_rating_table: 'trim' must be two quantiles with trim[1] < trim[2].")
   if (min_claims < 0)

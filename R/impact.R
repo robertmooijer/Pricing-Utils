@@ -61,6 +61,7 @@ premium_impact <- function(data,
   if (has_old_models && !is.null(old_premium_col))
     stop("premium_impact: provide either old models or 'old_premium_col', not both.")
   .check_cols(data, c(exposure_col, by, old_premium_col), "premium_impact")
+  data <- .as_df(data)
 
   # Predicted rate per unit of exposure (offset neutralised at exposure = 1)
   rate_of <- function(model) {

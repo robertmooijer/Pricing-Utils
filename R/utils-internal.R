@@ -10,12 +10,22 @@
   invisible(TRUE)
 }
 
+# Normalise to a plain data.frame. A data.table reads `d[, cols]` as an
+# expression rather than a column selection, and a tibble returns a
+# one-column tibble where a vector is expected, so anything that is not
+# exactly a data.frame is converted once at the entry point rather than
+# guarded at every call site.
+.as_df <- function(x) {
+  if (is.null(x)) return(NULL)
+  if (!identical(class(x), "data.frame")) as.data.frame(x) else x
+}
+
 # Training data (original columns) aligned with the fitted rows of a glm.
 # Uses rownames matching instead of as.integer(rownames), so it also works
 # with non-numeric rownames and rows dropped by na.action.
 .glm_training_data <- function(model, fn = "pricingtoolsRmO") {
-  mf <- stats::model.frame(model)
-  d  <- model$data
+  mf <- .as_df(stats::model.frame(model))
+  d  <- .as_df(model$data)
   if (!is.null(d) && is.data.frame(d)) {
     idx <- match(rownames(mf), rownames(d))
     if (anyNA(idx))
