@@ -65,6 +65,39 @@ test_that("near-duplicate candidates are reported", {
                     res$correlated$VarY == "KM_PROXY"))
 })
 
+test_that("awkward columns are dropped instead of crashing", {
+  # Every one of these used to trigger "contrasts can be applied only to
+  # factors with 2 or more levels" once features = NULL picked them up
+  d2 <- dscr
+  d2$CONST_F  <- factor(rep("N", nn))          # constant factor
+  d2$CONST_N  <- 1                             # constant numeric
+  d2$CHR      <- sample(c("p", "q", "r"), nn, TRUE)   # character column
+  d2$WIDE     <- factor(sample(seq_len(200), nn, TRUE))  # 200 levels
+  d2$DATUM    <- as.Date("2024-01-01") + sample(365, nn, TRUE)
+  m2 <- glm(AantalClaims ~ LEEFTIJD + REGIO + offset(log(Exposure)),
+            family = poisson(), data = d2)
+
+  expect_warning(
+    r2 <- screen_features(m2, seed = 2, nrounds = 100,
+                          early_stopping_rounds = 15, n_shap = 0),
+    "constant")
+  expect_s3_class(r2$features, "data.frame")
+  # dropped
+  expect_false(any(c("CONST_F", "CONST_N", "WIDE", "DATUM") %in%
+                     r2$features$Feature))
+  # a character column is usable and keeps a stable width across splits
+  expect_true("CHR" %in% r2$features$Feature)
+  expect_true("KM" %in% r2$features$Feature)
+})
+
+test_that("a single-level factor no longer breaks the design matrix", {
+  levs <- .screen_levels(dscr, "REGIO")
+  one  <- data.frame(REGIO = factor(rep("Stad", 5), levels = levels(dscr$REGIO)))
+  m <- .screen_matrix(one, "REGIO", levs)
+  expect_equal(ncol(m$x), nlevels(dscr$REGIO))   # width follows the level map
+  expect_equal(sum(m$x), 5)                      # one indicator per row
+})
+
 test_that("unsupported families and bad splits are refused", {
   m_id <- glm(AantalClaims ~ LEEFTIJD, family = gaussian(), data = dscr)
   expect_error(screen_features(m_id), "supported")

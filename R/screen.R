@@ -8,25 +8,36 @@
 # and Gamma severity alike
 .fam_deviance <- function(fam, y, mu, wt) sum(fam$dev.resids(y, mu, wt))
 
-# Design matrix for xgboost: numerics as is, factors one-hot. Returns the
-# matrix plus the mapping from each column back to its source feature.
-.screen_matrix <- function(d, features) {
-  blocks <- lapply(features, function(f) {
+# Level map, taken once on the full data. Deriving levels per split would
+# give a character column a different width in each split.
+.screen_levels <- function(d, features) {
+  stats::setNames(lapply(features, function(f) {
     x <- d[[f]]
-    if (is.character(x)) x <- factor(x)
-    if (is.logical(x))   x <- as.numeric(x)
-    if (is.factor(x)) {
-      m <- stats::model.matrix(~ x - 1)
-      colnames(m) <- paste0(f, levels(x))
+    if (is.character(x) || is.factor(x)) levels(factor(x)) else NULL
+  }), features)
+}
+
+# Design matrix for xgboost: numerics as is, factors one-hot. The
+# indicators are built directly rather than through model.matrix(), which
+# refuses a factor with a single level ("contrasts can be applied only to
+# factors with 2 or more levels") even when no contrasts are needed.
+.screen_matrix <- function(d, features, levs) {
+  blocks <- lapply(features, function(f) {
+    x  <- d[[f]]
+    lv <- levs[[f]]
+    if (!is.null(lv)) {
+      idx <- as.integer(factor(as.character(x), levels = lv))
+      m <- matrix(0, nrow(d), length(lv),
+                  dimnames = list(NULL, paste0(f, lv)))
+      ok <- !is.na(idx)
+      if (any(ok)) m[cbind(which(ok), idx[ok])] <- 1
       m
     } else {
-      m <- matrix(as.numeric(x), ncol = 1)
-      colnames(m) <- f
-      m
+      if (is.logical(x)) x <- as.numeric(x)
+      matrix(as.numeric(x), ncol = 1, dimnames = list(NULL, f))
     }
   })
-  mat <- do.call(cbind, blocks)
-  list(x = mat,
+  list(x = do.call(cbind, blocks),
        owner = rep(features, vapply(blocks, ncol, integer(1))))
 }
 
@@ -145,19 +156,32 @@ screen_features <- function(model, features = NULL,
             paste(missing_f, collapse = ", "), call. = FALSE)
     features <- intersect(features, names(d))
   }
-  usable <- vapply(features, function(f) {
+  # Classify each candidate, so a dropped column says why it was dropped
+  status <- vapply(features, function(f) {
     x <- d[[f]]
+    if (is.logical(x)) x <- as.numeric(x)
     if (is.character(x)) x <- factor(x)
-    if (is.factor(x) && nlevels(x) > max_levels) return(FALSE)
-    is.numeric(x) || is.factor(x) || is.logical(x)
-  }, logical(1))
-  if (any(!usable))
-    warning("screen_features: skipped (unsupported type or more than ",
-            max_levels, " levels): ",
-            paste(features[!usable], collapse = ", "), call. = FALSE)
-  features <- features[usable]
+    if (is.factor(x)) {
+      nl <- nlevels(droplevels(x))
+      if (nl < 2) return("constant")
+      if (nl > max_levels) return("too many levels")
+      return("ok")
+    }
+    if (!is.numeric(x)) return("unsupported type")
+    if (length(unique(x[!is.na(x)])) < 2) return("constant")
+    "ok"
+  }, character(1))
+
+  for (why in setdiff(unique(status), "ok"))
+    warning("screen_features: skipped (", why, "): ",
+            paste(features[status == why], collapse = ", "), call. = FALSE)
+  features <- features[status == "ok"]
   if (!length(features))
-    stop("screen_features: no usable candidate features.", call. = FALSE)
+    stop("screen_features: no usable candidate features left; every ",
+         "candidate was constant, unsupported or too high-cardinality.",
+         call. = FALSE)
+
+  levs <- .screen_levels(d, features)
 
   in_model <- intersect(features, .rhs_vars(model))
 
@@ -173,9 +197,20 @@ screen_features <- function(model, features = NULL,
 
   base <- tryCatch(stats::update(model, data = d_tr), error = function(e) NULL)
   if (is.null(base)) {
+    # Nearly always a factor level in the model formula that is absent from
+    # the training split, so name it rather than leave the user guessing
+    culprits <- Filter(Negate(is.null), lapply(.rhs_vars(model), function(v) {
+      x <- d_tr[[v]]
+      if (!is.null(x) && (is.factor(x) || is.character(x)) &&
+          nlevels(droplevels(factor(x))) < 2) v else NULL
+    }))
     warning("screen_features: the baseline could not be refitted on the ",
-            "training split; using the supplied model, whose deviance is ",
-            "then in-sample and flatters the baseline.", call. = FALSE)
+            "training split",
+            if (length(culprits))
+              paste0(" (no variation left in: ",
+                     paste(unlist(culprits), collapse = ", "), ")") else "",
+            "; using the supplied model, whose deviance is then in-sample ",
+            "and flatters the baseline.", call. = FALSE)
     base <- model
   }
 
@@ -191,12 +226,12 @@ screen_features <- function(model, features = NULL,
   y_te <- y_all[grp == "test"];  w_te <- w_all[grp == "test"]
 
   mk <- function(nd, y, w, margin_from = nd) {
-    m <- .screen_matrix(nd, features)
+    m <- .screen_matrix(nd, features, levs)
     dm <- xgboost::xgb.DMatrix(m$x, label = y, weight = w)
     xgboost::setinfo(dm, "base_margin", log(mu_of(margin_from)))
     dm
   }
-  layout_tr <- .screen_matrix(d_tr, features)
+  layout_tr <- .screen_matrix(d_tr, features, levs)
   cols <- layout_tr$owner
   nm   <- colnames(layout_tr$x)
 
