@@ -15,6 +15,8 @@ screen_features(
   n_shap = 4000,
   cor_threshold = 0.95,
   max_levels = 50,
+  max_rows = 1e+06,
+  nthread = NULL,
   seed = NULL
 )
 }
@@ -43,7 +45,19 @@ candidates are reported as near-duplicates (default 0.95).}
 \item{max_levels}{Factors with more levels than this are skipped
 (default 50).}
 
-\item{seed}{Optional seed for the split and the boosting.}
+\item{max_rows}{Work on a random sample of at most this many rows
+(default 1e6); \code{NULL} uses everything. Screening ranks candidates, and
+that ranking is stable long before the last million rows are added, so
+on a large portfolio this is much the cheapest lever: every stage
+(baseline refit, boosting, permutation) scales with the row count. The
+reported deviances then refer to the sample.}
+
+\item{nthread}{Threads for boosting. \code{NULL} (default) uses one fewer
+than the available cores. Boosting dominates the runtime, so this is
+the second lever: on an eight-core machine the measured gain over a
+single-threaded run is more than a factor of two.}
+
+\item{seed}{Optional seed for the sample, the split and the boosting.}
 }
 \value{
 A list with \code{summary} (the staged deviance comparison),

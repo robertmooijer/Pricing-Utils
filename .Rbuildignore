@@ -1,4 +1,5 @@
 ^\.github$
+^\.claude$
 ^LICENSE\.md$
 ^demo$
 ^glm_pricing_motorportefeuille\.md$

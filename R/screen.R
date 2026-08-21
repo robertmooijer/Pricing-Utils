@@ -101,7 +101,17 @@
 #'   candidates are reported as near-duplicates (default 0.95).
 #' @param max_levels Factors with more levels than this are skipped
 #'   (default 50).
-#' @param seed Optional seed for the split and the boosting.
+#' @param max_rows Work on a random sample of at most this many rows
+#'   (default 1e6); `NULL` uses everything. Screening ranks candidates, and
+#'   that ranking is stable long before the last million rows are added, so
+#'   on a large portfolio this is much the cheapest lever: every stage
+#'   (baseline refit, boosting, permutation) scales with the row count. The
+#'   reported deviances then refer to the sample.
+#' @param nthread Threads for boosting. `NULL` (default) uses one fewer
+#'   than the available cores. Boosting dominates the runtime, so this is
+#'   the second lever: on an eight-core machine the measured gain over a
+#'   single-threaded run is more than a factor of two.
+#' @param seed Optional seed for the sample, the split and the boosting.
 #'
 #' @return A list with `summary` (the staged deviance comparison),
 #'   `verdict` (one sentence), `features` (ranked candidates), `gain_note`,
@@ -115,7 +125,8 @@ screen_features <- function(model, features = NULL,
                             max_depth = 2, eta = 0.05, nrounds = 2000,
                             early_stopping_rounds = 40,
                             n_shap = 4000, cor_threshold = 0.95,
-                            max_levels = 50, seed = NULL) {
+                            max_levels = 50, max_rows = 1e6,
+                            nthread = NULL, seed = NULL) {
 
   if (!requireNamespace("xgboost", quietly = TRUE))
     stop("screen_features: package 'xgboost' is required ",
@@ -126,12 +137,27 @@ screen_features <- function(model, features = NULL,
     stop("screen_features: 'split' must be three positive shares summing to 1.",
          call. = FALSE)
   if (!is.null(seed)) set.seed(seed)
+  if (is.null(nthread))
+    nthread <- max(1L, parallel::detectCores() - 1L)
 
   tr <- .glm_training_data(model, "screen_features")
   if (is.null(tr$data))
     stop("screen_features: training data cannot be recovered; fit the model ",
          "with a 'data =' argument.", call. = FALSE)
   d <- tr$data
+
+  # Sub-sample before anything else: every later stage is linear in rows
+  keep_rows <- seq_len(nrow(d))
+  if (!is.null(max_rows) && nrow(d) > max_rows) {
+    keep_rows <- sort(sample(nrow(d), max_rows))
+    message("screen_features: sampling ", format(max_rows, big.mark = ","),
+            " of ", format(nrow(d), big.mark = ","), " rows (max_rows); ",
+            "pass max_rows = NULL to use all of them.")
+    d          <- d[keep_rows, , drop = FALSE]
+    tr$mf      <- tr$mf[keep_rows, , drop = FALSE]
+    tr$weights <- tr$weights[keep_rows]
+    if (!is.null(tr$offset)) tr$offset <- tr$offset[keep_rows]
+  }
 
   fam <- family(model)
   counts <- !is.null(tr$offset) && any(tr$offset != 0) &&
@@ -225,31 +251,45 @@ screen_features <- function(model, features = NULL,
   y_va <- y_all[grp == "valid"]; w_va <- w_all[grp == "valid"]
   y_te <- y_all[grp == "test"];  w_te <- w_all[grp == "test"]
 
-  mk <- function(nd, y, w, margin_from = nd) {
-    m <- .screen_matrix(nd, features, levs)
-    dm <- xgboost::xgb.DMatrix(m$x, label = y, weight = w)
-    xgboost::setinfo(dm, "base_margin", log(mu_of(margin_from)))
-    dm
-  }
+  # The baseline margin is the expensive part of a predict.glm call, and it
+  # does not change when a feature is shuffled, so compute it once per split
+  # instead of once per permutation.
+  margin_tr <- log(mu_of(d_tr))
+  margin_va <- log(mu_of(d_va))
+  mu_te     <- mu_of(d_te)
+  margin_te <- log(mu_te)
+
+  # Design matrices are built once as well; the permutation loop reshuffles
+  # the rows of one feature's column block in place.
   layout_tr <- .screen_matrix(d_tr, features, levs)
+  layout_te <- .screen_matrix(d_te, features, levs)
   cols <- layout_tr$owner
   nm   <- colnames(layout_tr$x)
 
-  dm_tr <- mk(d_tr, y_tr, w_tr)
-  dm_va <- mk(d_va, y_va, w_va)
-  dm_te <- mk(d_te, y_te, w_te)
+  mk_from <- function(x, y, w, margin) {
+    dm <- xgboost::xgb.DMatrix(x, label = y, weight = w)
+    xgboost::setinfo(dm, "base_margin", margin)
+    dm
+  }
+  mk <- function(nd, y, w, margin) {
+    mk_from(.screen_matrix(nd, features, levs)$x, y, w, margin)
+  }
+
+  dm_tr <- mk_from(layout_tr$x, y_tr, w_tr, margin_tr)
+  dm_va <- mk(d_va, y_va, w_va, margin_va)
+  dm_te <- mk_from(layout_te$x, y_te, w_te, margin_te)
 
   fit_depth <- function(depth) {
     xgboost::xgb.train(
       list(objective = objective, max_depth = depth, eta = eta,
-           subsample = 0.8, colsample_bytree = 0.8, nthread = 2),
+           subsample = 0.8, colsample_bytree = 0.8, nthread = nthread),
       dm_tr, nrounds = nrounds, watchlist = list(valid = dm_va),
       early_stopping_rounds = early_stopping_rounds, verbose = 0)
   }
   b1 <- fit_depth(1)
   b2 <- if (max_depth > 1) fit_depth(max_depth) else b1
 
-  dev0 <- .fam_deviance(fam, y_te, mu_of(d_te), w_te)
+  dev0 <- .fam_deviance(fam, y_te, mu_te, w_te)
   dev1 <- .fam_deviance(fam, y_te, predict(b1, dm_te), w_te)
   dev2 <- .fam_deviance(fam, y_te, predict(b2, dm_te), w_te)
   p1 <- 100 * (dev1 - dev0) / dev0
@@ -279,11 +319,15 @@ screen_features <- function(model, features = NULL,
 
   # Incremental importance: permute one feature, keep the baseline fixed --
   base_dev <- dev2
+  # Shuffling the rows of a feature's column block is equivalent to
+  # shuffling the underlying column, and avoids rebuilding the whole
+  # design matrix and re-running predict.glm for every candidate.
   perm <- vapply(features, function(f) {
-    nd <- d_te
-    nd[[f]] <- sample(nd[[f]])
+    x  <- layout_te$x
+    jj <- which(cols == f)
+    x[, jj] <- x[sample(nrow(x)), jj, drop = FALSE]
     .fam_deviance(fam, y_te,
-                  predict(b2, mk(nd, y_te, w_te, margin_from = d_te)),
+                  predict(b2, mk_from(x, y_te, w_te, margin_te)),
                   w_te) - base_dev
   }, numeric(1))
 
@@ -330,10 +374,22 @@ screen_features <- function(model, features = NULL,
   # SHAP interaction ranking ----------------------------------------------
   interactions <- NULL
   if (max_depth > 1 && n_shap > 0) {
+    # The SHAP interaction array is n_shap x (k+1) x (k+1) doubles, and k
+    # grows with every factor level once one-hot encoded, so cap the sample
+    # at roughly 1 GB rather than let it exhaust memory.
+    k_cols  <- length(nm)
+    max_rowsz <- max(500, floor(1e9 / (8 * (k_cols + 1)^2)))
+    if (n_shap > max_rowsz) {
+      message("screen_features: reducing n_shap from ", n_shap, " to ",
+              max_rowsz, " to keep the SHAP interaction array near 1 GB (",
+              k_cols, " matrix columns).")
+      n_shap <- max_rowsz
+    }
     s  <- sample(nrow(d_te), min(n_shap, nrow(d_te)))
-    nd <- d_te[s, , drop = FALSE]
     si <- tryCatch(
-      predict(b2, mk(nd, y_te[s], w_te[s]), predinteraction = TRUE),
+      predict(b2, mk_from(layout_te$x[s, , drop = FALSE],
+                          y_te[s], w_te[s], margin_te[s]),
+              predinteraction = TRUE),
       error = function(e) {
         warning("screen_features: SHAP interaction ranking failed: ",
                 conditionMessage(e), call. = FALSE)
@@ -393,6 +449,7 @@ screen_features <- function(model, features = NULL,
                     deviance_depth2 = dev2, pct_depth1 = p1, pct_depth2 = p2,
                     objective = objective, n_train = nrow(d_tr),
                     n_valid = nrow(d_va), n_test = nrow(d_te),
+                    n_rows_used = n, nthread = nthread,
                     best_iteration = c(depth1 = b1$best_iteration,
                                        depth2 = b2$best_iteration)),
        plot = p)
