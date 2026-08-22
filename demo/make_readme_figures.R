@@ -41,12 +41,23 @@ snap_table <- function(df, name, digits = 3, vwidth = 1800) {
   h <- htmltools::tags
   # Format per column type, as export_rating_table() does: counts with a
   # thousands separator and no decimals, factors with decimals.
+  # Decide the format per COLUMN, so a whole-number column never picks up
+  # spurious decimals and a large one keeps its thousands separator
+  col_fmt <- vapply(names(df), function(nm) {
+    x <- df[[nm]]
+    if (!is.numeric(x)) return("chr")
+    fin <- x[is.finite(x)]
+    if (!length(fin)) return("chr")
+    if (all(abs(fin - round(fin)) < 1e-9)) "int"
+    else if (max(abs(fin)) >= 1000) "big" else "dec"
+  }, character(1))
   fm <- function(x, nm) {
-    if (is.logical(x)) return(ifelse(x, "TRUE", "FALSE"))
-    if (!is.numeric(x)) return(as.character(x))
-    if (nm %in% c("Exposure", "ClaimCount"))
-      format(round(x), big.mark = ",", scientific = FALSE, trim = TRUE)
-    else formatC(x, format = "f", digits = digits)
+    if (is.logical(x)) return(ifelse(is.na(x), "", ifelse(x, "TRUE", "FALSE")))
+    switch(col_fmt[[nm]],
+      chr = as.character(x),
+      int = format(round(x), big.mark = ",", scientific = FALSE, trim = TRUE),
+      big = formatC(x, format = "f", digits = 1, big.mark = ","),
+      dec = formatC(x, format = "f", digits = digits))
   }
   rows <- lapply(seq_len(nrow(df)), function(i) {
     cls <- if (isTRUE(df$IsBase[i])) "base"
@@ -209,5 +220,81 @@ snap(plot_glm_predictor(m_freq, "LEEFTIJD", n_bins = 40, y_range = rng),
      "yrange-age", width = 640, height = 380)
 snap(plot_glm_predictor(m_freq, "REGIO", y_range = rng),
      "yrange-regio", width = 640, height = 380)
+
+## ── Figures for the functions that return a table or a file ──────────
+
+# Screenshot of an arbitrary HTML page, viewport only, for the report
+snap_page <- function(file, name, width = 1100, height = 850) {
+  png <- file.path(out_dir, paste0("README-", name, ".png"))
+  webshot2::webshot(paste0("file://", normalizePath(file, winslash = "/")),
+                    file = png, vwidth = width, vheight = height,
+                    delay = 3, zoom = 1.5, cliprect = "viewport")
+  cat("written:", png, "-", round(file.info(png)$size / 1024), "KB\n")
+  invisible(png)
+}
+
+# agg_all(): the aggregate that make_plot() builds internally
+snap_table(head(agg_all(dat, "REGIO", by_year = TRUE), 8), "agg-all")
+
+# glm_diagnostics(): one row per model
+snap_table(glm_diagnostics(m_freq, m_sev), "diagnostics")
+
+# glm_collinearity(): a deliberately duplicated predictor, so the pair
+# lights up and the independent terms do not
+dat$GEWICHT_PROXY <- dat$GEWICHT + round(rnorm(nrow(dat), 0, 30))
+m_col <- glm(AantalClaims ~ LEEFTIJD + GEWICHT + GEWICHT_PROXY + REGIO +
+               BRANDSTOF + offset(log(Exposure)),
+             family = poisson(), data = dat)
+snap_table(suppressWarnings(glm_collinearity(m_col)), "collinearity")
+
+# detect_interactions(): the scan on the model that is missing one
+snap_table(detect_interactions(m_gap, n_bins = 8, n_sim = 200, seed = 1)[
+             , c("VarX", "VarY", "Claims", "Deviance", "DF", "Z", "P",
+                 "MaxAE", "MaxAE_ExposureShare")],
+           "detect-interactions")
+
+# screen_features(): baseline without GEWICHT, plus a pure-noise column
+dat$RUIS <- round(rnorm(nrow(dat)), 2)
+m_base_scr <- glm(AantalClaims ~ ns(LEEFTIJD, 5) + REGIO +
+                    offset(log(Exposure)), family = poisson(), data = dat)
+scr <- suppressWarnings(suppressMessages(
+  screen_features(m_base_scr, seed = 1, n_shap = 0,
+                  features = c("LEEFTIJD", "REGIO", "GEWICHT",
+                               "GEWICHT_PROXY", "BRANDSTOF", "RUIS"))))
+snap(scr$plot, "screen-features", width = 760, height = 420)
+
+# model_lift(): the Lorenz curve behind the Gini
+snap(model_lift(m_freq, data = dat, actual_col = "AantalClaims")$plot_lorenz,
+     "lorenz", width = 700, height = 460)
+
+# premium_impact(): the spotlight overlay
+imp_s <- premium_impact(dat, model_freq_new = m_freq, model_sev_new = m_sev,
+                        old_premium_col = "HUIDIGE_PREMIE",
+                        spotlight = REGIO == "Randstad" & LEEFTIJD < 25)
+snap(imp_s$plot, "premium-impact-spotlight", width = 800)
+
+# export_rating_table(): what the Overview sheet holds
+ov <- data.frame(
+  Item = c("Generated",
+           "Intercept frequency (per exposure unit)",
+           "Intercept severity", "Intercept premium",
+           paste("Base value", names(attr(tbl, "base_values")))),
+  Value = c(format(Sys.time(), "%Y-%m-%d %H:%M"),
+            formatC(attr(tbl, "intercept_frequency"), format = "f", digits = 5),
+            formatC(attr(tbl, "intercept_severity"), format = "f", digits = 1),
+            formatC(attr(tbl, "intercept_premium"), format = "f", digits = 2),
+            vapply(attr(tbl, "base_values"),
+                   function(x) paste(format(x), collapse = ", "),
+                   character(1))),
+  stringsAsFactors = FALSE)
+snap_table(ov, "export-overview", vwidth = 900)
+
+# pricing_report(): the generated page itself
+rep_file <- file.path(tempdir(), "figs", "report.html")
+suppressMessages(pricing_report(
+  m_freq, m_sev, dat, file = rep_file, title = "Motor portfolio – GLM pricing",
+  variables = c("LEEFTIJD", "REGIO"),
+  include = c("diagnostics", "oneway", "rating")))
+snap_page(rep_file, "pricing-report")
 
 cat("\nAll figures written to", out_dir, "\n")

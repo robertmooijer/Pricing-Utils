@@ -243,6 +243,8 @@ Warnings are raised for `NA` values in the input columns and for groups with
 non-positive exposure, so data-quality issues are visible instead of silently
 averaged away.
 
+![agg_all output](man/figures/README-agg-all.png)
+
 ### `make_plot()`
 
 One-way plot of frequency or severity with exposure bars on a secondary
@@ -269,6 +271,8 @@ make_plot(data, col, metric = c("Frequency", "Severity"),
   line.
 
 **Returns** a plotly object.
+
+![One-way plot](man/figures/README-oneway.png)
 
 ### `make_pdp()`
 
@@ -394,6 +398,8 @@ glm_diagnostics(model_freq = NULL, model_sev = NULL)
 `N`, `Deviance`, `DFResidual`, `AIC`, `Dispersion` (Pearson χ² / df) and
 `DevianceExplained` (1 − deviance / null deviance, a pseudo-R²).
 
+![Diagnostics table](man/figures/README-diagnostics.png)
+
 For Poisson/binomial families a **dispersion above 1.2 raises an
 overdispersion warning**: the point estimates are still consistent, but
 standard errors are understated, so consider a quasi-Poisson or negative
@@ -421,6 +427,13 @@ prediction, and a rating table is an interpretation.
 
 **Returns** a data.frame with `Term`, `DF`, `GVIF`, `GVIF_scaled` and
 `Flag`, ordered by `GVIF_scaled`, plus a warning naming the flagged terms.
+
+Below, a model containing two near-duplicate weight columns. The pair is
+flagged at a scaled GVIF of 8.4 while every independent term sits at 1.0 —
+and note that `REGIO` spans 4 degrees of freedom and `BRANDSTOF` 3, which
+is exactly why the generalised form is needed:
+
+![Collinearity table](man/figures/README-collinearity.png)
 
 > This is the model-level counterpart of the near-duplicate warning in
 > [`screen_features()`](#screen_features): that one catches correlated
@@ -479,6 +492,12 @@ factor surfaces.
 **Returns** a data.frame, strongest first: `VarX`, `VarY`, `Cells`,
 `Claims`, `Deviance`, `DF`, `Z`, `P`, `Method`, `MaxAE`, `MaxAE_Claims`,
 `MaxAE_ExposureShare`.
+
+On the portfolio that is missing an age × region interaction, the true
+pair comes out at `Z = 33.9` against 1.6 for the runner-up — and its worst
+cell is 27% mispriced on 3% of the exposure:
+
+![Interaction scan](man/figures/README-detect-interactions.png)
 
 > The ranking is by statistical signal (`Z`), which is not the same as
 > materiality. Judge the two separately: `MaxAE` is the A/E of the worst
@@ -569,7 +588,11 @@ Three things to read carefully:
   arbitrary. Pairs above `cor_threshold` are listed in `$correlated` with
   a warning.
 
-Also returns `$interactions` (SHAP ranking), `$stats` and `$plot`.
+Also returns `$interactions` (SHAP ranking), `$stats` and `$plot`. The
+plot ranks candidates by incremental value, muting everything at or below
+zero — the columns that carry no signal:
+
+![Feature screening](man/figures/README-screen-features.png)
 
 > **Sensitivity.** A booster is *less* sensitive to a two-way interaction
 > between known rating factors than
@@ -695,6 +718,11 @@ chart) and `plot_lorenz`.
 
 ![Lift chart](man/figures/README-lift.png)
 
+`plot_lorenz` shows the curve the Gini is computed from — the further it
+bows away from the diagonal, the more the model separates risk:
+
+![Lorenz curve](man/figures/README-lorenz.png)
+
 > **Units must match.** Use claim counts with a frequency model and loss
 > amounts with a severity or risk premium model. If the overall A/E comes
 > out far from 1 the function warns, because that nearly always means
@@ -800,6 +828,8 @@ still analysed, the subset appears as a second series on the histogram, and
 contribution to the portfolio total. Filtering would remove exactly the
 context you need — that a segment moves +18% while the book moves +2%.
 
+![Premium impact with spotlight](man/figures/README-premium-impact-spotlight.png)
+
 Its statistics are computed **after** the book-level rebase, because the
 rebase is a decision about the whole portfolio. Rebasing within the subset
 would force every segment to average out at zero and tell you nothing.
@@ -831,6 +861,15 @@ The workbook contains:
 - **one sheet per interaction** — the long table plus a Level × Group
   matrix of the premium factor, ready for tariff implementation.
 
+The Overview sheet, which carries everything needed to reconstruct a
+premium from the factor sheets:
+
+![Excel overview sheet](man/figures/README-export-overview.png)
+
+The variable sheets carry the same highlighting shown under
+[`make_rating_table()`](#make_rating_table): base row picked out, thin rows
+greyed.
+
 ### `pricing_report()`
 
 One call that bundles the whole analysis into a single HTML report.
@@ -858,6 +897,11 @@ shown as a note instead of aborting the report.
 It is built with `htmltools` (no pandoc needed); all plots remain fully
 interactive. Next to the `.html` a `<name>_files/` folder is written with
 the JavaScript dependencies — keep the two together when sharing.
+
+The top of a generated report: title, both model formulas, a table of
+contents, and the diagnostics block:
+
+![Generated pricing report](man/figures/README-pricing-report.png)
 
 ---
 
