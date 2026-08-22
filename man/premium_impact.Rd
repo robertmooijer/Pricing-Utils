@@ -16,6 +16,7 @@ premium_impact(
   by = NULL,
   n_show = 10,
   exposure_col = "Exposure",
+  spotlight = NULL,
   x_range = NULL,
   y_range = NULL
 )
@@ -36,11 +37,23 @@ exposure).}
 \item{rebase}{\code{TRUE} = scale new premiums to the old total (default).}
 
 \item{by}{Optional character vector of columns for a per-level impact
-breakdown (exposure-weighted mean change).}
+breakdown. Besides the exposure-weighted mean change per level, this
+gives \verb{Contribution = ExposureShare x MeanChangePct}, which sums over
+the levels of one variable to the portfolio change and so answers
+which segment is driving it.}
 
 \item{n_show}{Number of rows in the winners/losers tables (default 10).}
 
 \item{exposure_col}{Exposure column (default \code{"Exposure"}).}
+
+\item{spotlight}{Optional subset to report separately: either a logical
+vector with one value per row of \code{data}, or an expression evaluated
+against \code{data}, e.g. \code{REGIO == "Stad" & LEEFTIJD < 25}. It is a
+spotlight rather than a filter: the whole book is still analysed, and
+the subset appears as a second series on the histogram and as
+\verb{$spotlight} in the result. Its statistics are computed after the
+book-level rebase, so they show how the subset moves relative to the
+portfolio.}
 
 \item{x_range, y_range}{Optional \code{c(lo, hi)} to fix the axes of the
 returned histogram, so impact plots for different scenarios become
@@ -54,9 +67,11 @@ changes, so the summary statistics are unaffected.}
 A list with \code{summary} (display table with the headline numbers),
 \code{stats} (the same numbers as a named list), \code{policy} (per-row
 \code{OldRate}, \code{NewRate}, \code{NewRateRebased}, \code{ChangePct}), \code{by_level}
-(exposure-weighted mean change per level, when \code{by} is given),
-\code{largest_increases} / \code{largest_decreases} (top-\code{n_show} dislocations)
-and \code{plot} (exposure-weighted histogram of the premium changes).
+(per level: exposure, share, mean change and contribution, when \code{by}
+is given), \code{spotlight} (the same headline numbers for the subset, when
+\code{spotlight} is given), \code{largest_increases} / \code{largest_decreases}
+(top-\code{n_show} dislocations) and \code{plot} (exposure-weighted histogram of
+the premium changes, with the spotlight overlaid).
 }
 \description{
 Compares premiums under a new model set against an old model set (or an
@@ -71,3 +86,13 @@ totals match the old ones. That isolates the redistribution
 (dislocation) from the overall rate-level change, which is reported
 separately in the summary.
 }
+\section{What is not decomposed}{
+
+Old and new premiums are compared on the \emph{same} policies, so the
+portfolio mix is identical on both sides and there is no mix effect to
+isolate. \code{Contribution} therefore answers "which segment drives the
+overall change", not "how much of the change is mix". A genuine
+mix-shift analysis needs two portfolio snapshots and is a different
+calculation.
+}
+

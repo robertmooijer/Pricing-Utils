@@ -51,6 +51,93 @@ glm_diagnostics <- function(model_freq = NULL, model_sev = NULL) {
   out
 }
 
+#' Collinearity between model terms
+#'
+#' Reports the generalised variance inflation factor per **term**, not per
+#' coefficient. A plain VIF is meaningless for a pricing model, where a
+#' spline or a factor spans several columns: the generalised form of Fox
+#' and Monette handles multi-column terms, and `GVIF^(1/(2*DF))` puts them
+#' back on a scale comparable across terms.
+#'
+#' Read `GVIF_scaled` like a plain VIF on the square-root scale: the
+#' default threshold of 3 corresponds to a VIF of about 9. A high value
+#' means that term is largely explained by the others, so its coefficient
+#' is unstable and its rating factors are not interpretable on their own,
+#' even though the model's overall predictions may be perfectly fine.
+#'
+#' This is the model-level counterpart of the near-duplicate warning in
+#' [screen_features()]: that one catches correlated *candidates* before
+#' they go in, this one catches them once they are both in the model.
+#'
+#' @param model A fitted glm object with at least two terms.
+#' @param threshold Flag terms whose `GVIF_scaled` reaches this value
+#'   (default 3).
+#'
+#' @return A data.frame with `Term`, `DF`, `GVIF`, `GVIF_scaled` and
+#'   `Flag`, ordered by `GVIF_scaled`. Returns zero rows with a message
+#'   when the model has fewer than two terms.
+#' @seealso [glm_diagnostics()]
+#' @export
+glm_collinearity <- function(model, threshold = 3) {
+
+  if (!inherits(model, "glm"))
+    stop("glm_collinearity: 'model' must be a glm object.", call. = FALSE)
+
+  labs <- attr(terms(model), "term.labels")
+  if (length(labs) < 2) {
+    message("glm_collinearity: fewer than two terms, nothing to compare.")
+    return(data.frame(Term = character(0), DF = integer(0),
+                      GVIF = numeric(0), GVIF_scaled = numeric(0),
+                      Flag = logical(0), stringsAsFactors = FALSE))
+  }
+
+  v  <- stats::vcov(model)
+  as_ <- attr(stats::model.matrix(model), "assign")
+  nm <- colnames(stats::model.matrix(model))
+  # Aliased coefficients are dropped from vcov, so line the two up by name
+  keep <- nm %in% rownames(v) & as_ != 0
+  as_  <- as_[keep]
+  v    <- v[nm[keep], nm[keep], drop = FALSE]
+  if (!length(as_) || length(unique(as_)) < 2) {
+    message("glm_collinearity: fewer than two estimable terms.")
+    return(data.frame(Term = character(0), DF = integer(0),
+                      GVIF = numeric(0), GVIF_scaled = numeric(0),
+                      Flag = logical(0), stringsAsFactors = FALSE))
+  }
+
+  R    <- stats::cov2cor(v)
+  detR <- det(R)
+  if (!is.finite(detR) || detR <= 0) {
+    warning("glm_collinearity: the coefficient correlation matrix is ",
+            "singular, which is itself a sign of exact collinearity; ",
+            "GVIF cannot be computed.", call. = FALSE)
+    return(data.frame(Term = character(0), DF = integer(0),
+                      GVIF = numeric(0), GVIF_scaled = numeric(0),
+                      Flag = logical(0), stringsAsFactors = FALSE))
+  }
+
+  ids <- sort(unique(as_))
+  out <- do.call(rbind, lapply(ids, function(i) {
+    sel  <- as_ == i
+    gvif <- det(R[sel, sel, drop = FALSE]) *
+            det(R[!sel, !sel, drop = FALSE]) / detR
+    dfi  <- sum(sel)
+    data.frame(Term = labs[i], DF = dfi, GVIF = gvif,
+               GVIF_scaled = gvif^(1 / (2 * dfi)),
+               stringsAsFactors = FALSE)
+  }))
+  out$Flag <- out$GVIF_scaled >= threshold
+  out <- out[order(-out$GVIF_scaled), ]
+  rownames(out) <- NULL
+
+  if (any(out$Flag))
+    warning("glm_collinearity: ", sum(out$Flag), " term(s) at or above a ",
+            "scaled GVIF of ", threshold, " (", paste(out$Term[out$Flag],
+            collapse = ", "), "); their factors are unstable and should ",
+            "not be read individually.", call. = FALSE)
+  out
+}
+
 #' Binned residual plot
 #'
 #' For individual policy rows raw residual plots are unreadable (Poisson

@@ -20,7 +20,18 @@
 #'   exposure).
 #' @param rebase `TRUE` = scale new premiums to the old total (default).
 #' @param by Optional character vector of columns for a per-level impact
-#'   breakdown (exposure-weighted mean change).
+#'   breakdown. Besides the exposure-weighted mean change per level, this
+#'   gives `Contribution = ExposureShare x MeanChangePct`, which sums over
+#'   the levels of one variable to the portfolio change and so answers
+#'   which segment is driving it.
+#' @param spotlight Optional subset to report separately: either a logical
+#'   vector with one value per row of `data`, or an expression evaluated
+#'   against `data`, e.g. `REGIO == "Stad" & LEEFTIJD < 25`. It is a
+#'   spotlight rather than a filter: the whole book is still analysed, and
+#'   the subset appears as a second series on the histogram and as
+#'   `$spotlight` in the result. Its statistics are computed after the
+#'   book-level rebase, so they show how the subset moves relative to the
+#'   portfolio.
 #' @param n_show Number of rows in the winners/losers tables (default 10).
 #' @param exposure_col Exposure column (default `"Exposure"`).
 #' @param x_range,y_range Optional `c(lo, hi)` to fix the axes of the
@@ -34,9 +45,19 @@
 #' @return A list with `summary` (display table with the headline numbers),
 #'   `stats` (the same numbers as a named list), `policy` (per-row
 #'   `OldRate`, `NewRate`, `NewRateRebased`, `ChangePct`), `by_level`
-#'   (exposure-weighted mean change per level, when `by` is given),
-#'   `largest_increases` / `largest_decreases` (top-`n_show` dislocations)
-#'   and `plot` (exposure-weighted histogram of the premium changes).
+#'   (per level: exposure, share, mean change and contribution, when `by`
+#'   is given), `spotlight` (the same headline numbers for the subset, when
+#'   `spotlight` is given), `largest_increases` / `largest_decreases`
+#'   (top-`n_show` dislocations) and `plot` (exposure-weighted histogram of
+#'   the premium changes, with the spotlight overlaid).
+#'
+#' @section What is not decomposed:
+#' Old and new premiums are compared on the *same* policies, so the
+#' portfolio mix is identical on both sides and there is no mix effect to
+#' isolate. `Contribution` therefore answers "which segment drives the
+#' overall change", not "how much of the change is mix". A genuine
+#' mix-shift analysis needs two portfolio snapshots and is a different
+#' calculation.
 #' @export
 premium_impact <- function(data,
                            model_freq_new = NULL, model_sev_new = NULL,
@@ -47,46 +68,40 @@ premium_impact <- function(data,
                            by           = NULL,
                            n_show       = 10,
                            exposure_col = "Exposure",
+                           spotlight    = NULL,
                            x_range      = NULL,
                            y_range      = NULL) {
 
   old_premium_basis <- match.arg(old_premium_basis)
   x_range <- .check_range(x_range, "premium_impact", "x_range")
   y_range <- .check_range(y_range, "premium_impact")
-  if (is.null(model_freq_new) && is.null(model_sev_new))
-    stop("premium_impact: provide at least one NEW model.")
-  has_old_models <- !is.null(model_freq_old) || !is.null(model_sev_old)
-  if (!has_old_models && is.null(old_premium_col))
-    stop("premium_impact: provide old models or 'old_premium_col'.")
-  if (has_old_models && !is.null(old_premium_col))
-    stop("premium_impact: provide either old models or 'old_premium_col', not both.")
   .check_cols(data, c(exposure_col, by, old_premium_col), "premium_impact")
   data <- .as_df(data)
 
-  # Predicted rate per unit of exposure (offset neutralised at exposure = 1)
-  rate_of <- function(model) {
-    if (is.null(model)) return(rep(1, nrow(data)))
-    nd <- data
-    if (!is.null(model$offset)) {
-      if (exposure_col %in% names(nd)) {
-        nd[[exposure_col]] <- 1
-      } else {
-        warning("premium_impact: a model has an offset but column '",
-                exposure_col, "' is not in 'data'; premiums are then not ",
-                "per unit of exposure.", call. = FALSE)
-      }
-    }
-    as.numeric(predict(model, newdata = nd, type = "response"))
+  # The spotlight is evaluated against the full data, before any rows are
+  # dropped, so the mask lines up with the rows it was written for
+  # Evaluated as an expression against `data` first, falling back to the
+  # caller's environment, so both `REGIO == "Stad"` and a logical vector
+  # work. The promise must not be forced before this, or a column name
+  # would be looked up in the caller and fail.
+  spot_expr <- substitute(spotlight)
+  spot <- if (is.null(spot_expr)) NULL else {
+    s <- tryCatch(eval(spot_expr, data, parent.frame()),
+                  error = function(e)
+                    stop("premium_impact: 'spotlight' could not be ",
+                         "evaluated against 'data': ", conditionMessage(e),
+                         call. = FALSE))
+    if (!is.logical(s) || length(s) != nrow(data))
+      stop("premium_impact: 'spotlight' must give one TRUE/FALSE per row ",
+           "of 'data'.", call. = FALSE)
+    s & !is.na(s)
   }
 
-  new_rate <- rate_of(model_freq_new) * rate_of(model_sev_new)
-  old_rate <- if (has_old_models) {
-    rate_of(model_freq_old) * rate_of(model_sev_old)
-  } else if (old_premium_basis == "amount") {
-    data[[old_premium_col]] / data[[exposure_col]]
-  } else {
-    data[[old_premium_col]]
-  }
+  r <- .old_new_rates(data, model_freq_new, model_sev_new,
+                      model_freq_old, model_sev_old, old_premium_col,
+                      old_premium_basis, exposure_col, "premium_impact")
+  new_rate <- r$new
+  old_rate <- r$old
 
   expo <- data[[exposure_col]]
   keep <- is.finite(new_rate) & is.finite(old_rate) & old_rate > 0 &
@@ -126,16 +141,65 @@ premium_impact <- function(data,
   policy$ChangePct      <- change
   rownames(policy) <- NULL
 
+  # Contribution decomposition. The portfolio is the same on both sides, so
+  # there is no mix effect to isolate; what can be decomposed is who causes
+  # the overall change. Contribution = share x change, and the levels of one
+  # variable sum to the portfolio change.
   by_level <- NULL
   if (!is.null(by)) {
+    tot_w <- sum(expo)
     by_level <- do.call(rbind, lapply(by, function(v) {
       dtb <- data.table::data.table(Level = as.character(data[[v]][idx]),
                                     w = expo, ch = change)
       ag  <- dtb[, .(Exposure      = sum(w),
                      MeanChangePct = sum(ch * w) / sum(w)), by = Level]
+      ag[, ExposureShare := Exposure / tot_w]
+      ag[, Contribution  := ExposureShare * MeanChangePct]
       data.frame(Variable = v, as.data.frame(ag), stringsAsFactors = FALSE)
     }))
+    by_level <- by_level[order(by_level$Variable,
+                               -abs(by_level$Contribution)), ]
     rownames(by_level) <- NULL
+  }
+
+  # Spotlight: the same headline numbers for a subset, computed AFTER the
+  # book-level rebase, so it shows how that subset moves relative to the
+  # book rather than relative to itself.
+  spotlight_res <- NULL
+  if (!is.null(spot)) {
+    sm <- spot[idx]
+    if (!any(sm)) {
+      warning("premium_impact: 'spotlight' selects no usable rows.",
+              call. = FALSE)
+    } else {
+      sq <- wq(change[sm], expo[sm], c(0.05, 0.50, 0.95))
+      spotlight_res <- list(
+        n_rows          = sum(sm),
+        exposure        = sum(expo[sm]),
+        exposure_share  = sum(expo[sm]) / sum(expo),
+        old_total       = sum(old_rate[sm] * expo[sm]),
+        new_total       = sum(new_adj[sm] * expo[sm]),
+        mean_change     = sum(change[sm] * expo[sm]) / sum(expo[sm]),
+        median_change   = sq[2],
+        p5_change       = sq[1],
+        p95_change      = sq[3],
+        share_gt_10     = sum(expo[sm][abs(change[sm]) > 10]) / sum(expo[sm]),
+        contribution    = sum(expo[sm]) / sum(expo) *
+                          (sum(change[sm] * expo[sm]) / sum(expo[sm])))
+      spotlight_res$summary <- data.frame(
+        Metric = c("Rows in spotlight", "Exposure share of the book",
+                   "Mean change (exposure-weighted)", "Median change",
+                   "P5 .. P95 change", "Exposure share |change| > 10%",
+                   "Contribution to the portfolio change"),
+        Value = c(format(spotlight_res$n_rows, big.mark = ","),
+                  sprintf("%.1f%%", 100 * spotlight_res$exposure_share),
+                  sprintf("%+.2f%%", spotlight_res$mean_change),
+                  sprintf("%+.2f%%", spotlight_res$median_change),
+                  sprintf("%+.1f%% .. %+.1f%%", sq[1], sq[3]),
+                  sprintf("%.1f%%", 100 * spotlight_res$share_gt_10),
+                  sprintf("%+.2f%%", spotlight_res$contribution)),
+        stringsAsFactors = FALSE)
+    }
   }
 
   ord   <- order(policy$ChangePct, decreasing = TRUE)
@@ -179,13 +243,29 @@ premium_impact <- function(data,
   h_exp[is.na(h_exp)] <- 0
   mids   <- (utils::head(brks, -1) + utils::tail(brks, -1)) / 2
 
+  bar_name <- if (is.null(spotlight_res)) "Exposure" else "Whole portfolio"
   p <- plot_ly() %>%
-    add_bars(x = mids, y = h_exp, width = diff(brks), name = "Exposure",
+    add_bars(x = mids, y = h_exp, width = diff(brks), name = bar_name,
              marker = list(color = ta_blue, opacity = 0.75,
                            line = list(color = "white", width = 0.5)),
              hovertemplate = paste0("<b>Change:</b> %{x:.1f}%",
                                     "<br><b>Exposure:</b> %{y:,.0f}",
-                                    "<extra></extra>")) %>%
+                                    "<extra></extra>"))
+
+  if (!is.null(spotlight_res)) {
+    sm  <- spot[idx]
+    hs  <- as.numeric(tapply(expo[sm], bin_id[sm], sum))
+    hs[is.na(hs)] <- 0
+    p <- p %>% add_bars(
+      x = mids, y = hs, width = diff(brks), name = "Spotlight",
+      marker = list(color = ta_gold, opacity = 0.85,
+                    line = list(color = "white", width = 0.5)),
+      hovertemplate = paste0("<b>Change:</b> %{x:.1f}%",
+                             "<br><b>Exposure (spotlight):</b> %{y:,.0f}",
+                             "<extra></extra>"))
+  }
+
+  p <- p %>%
     layout(
       title  = list(text = paste0("Premium impact",
                                   if (rebase) " (rebased to old total)" else "",
@@ -210,6 +290,9 @@ premium_impact <- function(data,
                               showarrow = FALSE, yanchor = "bottom",
                               font = list(color = ta_gold, size = 11))),
       hoverlabel   = list(bgcolor = "white", font = list(size = 12)),
+      barmode      = "overlay",
+      legend       = list(orientation = "h", y = -0.2),
+      showlegend   = !is.null(spotlight_res),
       plot_bgcolor = "white", paper_bgcolor = "white",
       margin       = list(b = 60, r = 40)
     ) %>%
@@ -226,6 +309,7 @@ premium_impact <- function(data,
                                 n_rows = length(idx), n_dropped = n_drop),
        policy            = policy,
        by_level          = by_level,
+       spotlight         = spotlight_res,
        largest_increases = largest_increases,
        largest_decreases = largest_decreases,
        plot              = p)

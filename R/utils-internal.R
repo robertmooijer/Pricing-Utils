@@ -122,6 +122,94 @@
   unique(unlist(lapply(idx, function(i) all.vars(vars[[i + 1L]]))))
 }
 
+# Predicted rate per unit of exposure. The offset is neutralised by setting
+# the exposure column to 1, so a frequency and a severity model multiply to
+# a risk premium per exposure unit. A NULL model contributes a factor 1.
+.model_rate <- function(model, data, exposure_col, fn) {
+  if (is.null(model)) return(rep(1, nrow(data)))
+  nd <- data
+  if (!is.null(model$offset)) {
+    if (exposure_col %in% names(nd)) {
+      nd[[exposure_col]] <- 1
+    } else {
+      warning(fn, ": a model has an offset but column '", exposure_col,
+              "' is not in the data; rates are then not per unit of ",
+              "exposure.", call. = FALSE)
+    }
+  }
+  as.numeric(predict(model, newdata = nd, type = "response"))
+}
+
+# Old and new rate per policy, from either two model sets or an existing
+# premium column. Shared by premium_impact() and double_lift() so the two
+# cannot drift apart.
+.old_new_rates <- function(data, model_freq_new, model_sev_new,
+                           model_freq_old, model_sev_old,
+                           old_premium_col, old_premium_basis,
+                           exposure_col, fn) {
+  if (is.null(model_freq_new) && is.null(model_sev_new))
+    stop(fn, ": provide at least one NEW model.", call. = FALSE)
+  has_old <- !is.null(model_freq_old) || !is.null(model_sev_old)
+  if (!has_old && is.null(old_premium_col))
+    stop(fn, ": provide old models or 'old_premium_col'.", call. = FALSE)
+  if (has_old && !is.null(old_premium_col))
+    stop(fn, ": provide either old models or 'old_premium_col', not both.",
+         call. = FALSE)
+
+  new_rate <- .model_rate(model_freq_new, data, exposure_col, fn) *
+              .model_rate(model_sev_new,  data, exposure_col, fn)
+  old_rate <- if (has_old) {
+    .model_rate(model_freq_old, data, exposure_col, fn) *
+      .model_rate(model_sev_old, data, exposure_col, fn)
+  } else if (old_premium_basis == "amount") {
+    data[[old_premium_col]] / data[[exposure_col]]
+  } else {
+    data[[old_premium_col]]
+  }
+  list(new = new_rate, old = old_rate)
+}
+
+# An overall A/E far from 1 nearly always means the prediction and
+# `actual_col` are not the same quantity: a frequency model compared
+# against loss amounts, or a risk premium against claim counts. Cheap to
+# check and it catches the mistake before anyone reads the chart.
+.check_ae_scale <- function(actual, predicted, fn, actual_col) {
+  if (predicted <= 0 || actual <= 0) return(invisible(NULL))
+  ae <- actual / predicted
+  if (ae > 2 || ae < 0.5)
+    warning(fn, ": the overall actual/expected is ", signif(ae, 3),
+            ", so '", actual_col, "' and the model predictions are ",
+            "probably not the same quantity. Use claim counts with a ",
+            "frequency model and loss amounts with a severity or risk ",
+            "premium model.", call. = FALSE)
+  invisible(NULL)
+}
+
+# Bins holding roughly equal exposure, ordered by `score`. Equal exposure
+# rather than equal policy counts, so every bin carries the same weight in
+# the comparison.
+.exposure_bins <- function(score, weight, n_bins) {
+  o  <- order(score)
+  cw <- cumsum(weight[o]) / sum(weight)
+  b  <- pmin(n_bins, floor(cw * n_bins) + 1L)
+  out <- integer(length(score))
+  out[o] <- b
+  out
+}
+
+# Gini of the exposure-weighted Lorenz curve: cumulative share of actual
+# losses against cumulative share of exposure, ordered by the prediction.
+# 0 means no discrimination, higher means the model separates risk better.
+# Not the classical income Gini, which orders by the variable itself.
+.gini_exposure <- function(score, actual, weight) {
+  o <- order(score)
+  x <- cumsum(weight[o]) / sum(weight)
+  y <- cumsum(actual[o]) / sum(actual)
+  x <- c(0, x); y <- c(0, y)
+  auc <- sum(diff(x) * (utils::head(y, -1) + utils::tail(y, -1)) / 2)
+  1 - 2 * auc
+}
+
 # Underlying column of a term label: "ns(AGE, 4)" -> "AGE"
 .term_base_var <- function(term, data) {
   if (term %in% names(data)) return(term)

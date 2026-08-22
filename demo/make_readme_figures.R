@@ -187,6 +187,17 @@ m_gap <- glm(AantalClaims ~ ns(LEEFTIJD, 5) + REGIO + offset(log(Exposure)),
 snap(plot_residual_heatmap(m_gap, "LEEFTIJD", "REGIO", n_bins = 10),
      "residual-heatmap", width = 800)
 
+# Portfolio-level comparison. Both sides must predict the same quantity as
+# actual_col, so this compares two FREQUENCY models against claim counts:
+# the full one against a region-only tariff.
+m_thin <- glm(AantalClaims ~ REGIO + offset(log(Exposure)),
+              family = poisson(), data = dat)
+snap(model_lift(m_freq, data = dat, actual_col = "AantalClaims")$plot,
+     "lift", width = 800)
+snap(double_lift(dat, model_freq_new = m_freq, model_freq_old = m_thin,
+                 actual_col = "AantalClaims")$plot,
+     "double-lift", width = 800)
+
 imp <- premium_impact(dat, model_freq_new = m_freq, model_sev_new = m_sev,
                       old_premium_col = "HUIDIGE_PREMIE",
                       by = c("REGIO", "BRANDSTOF"))

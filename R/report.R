@@ -136,9 +136,22 @@ pricing_report <- function(model_freq = NULL, model_sev = NULL, data,
   diag_sec <- NULL
   if ("diagnostics" %in% include) {
     dg <- glm_diagnostics(model_freq, model_sev)
+    col_tbl <- tryCatch({
+      cl <- suppressWarnings(glm_collinearity(
+        if (!is.null(model_freq)) model_freq else model_sev))
+      if (nrow(cl)) htmltools::tagList(
+        h$h3("Collinearity between terms"),
+        h$p(class = "ta-meta",
+            "Generalised VIF per term. Read GVIF_scaled like a VIF on the ",
+            "square-root scale: 3 corresponds to a VIF of about 9. A high ",
+            "value means that term's factors cannot be read on their own."),
+        html_table(cl)) else NULL
+    }, error = function(e) NULL)
+
     diag_sec <- htmltools::tagList(
       h$h2(id = "diagnostics", "Model diagnostics"),
       html_table(dg),
+      col_tbl,
       if (!is.null(model_freq)) htmltools::tagList(
         h$h3("Binned residuals \u2013 frequency"),
         safe(plot_glm_residuals(model_freq))),

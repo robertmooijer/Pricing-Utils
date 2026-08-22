@@ -5,11 +5,11 @@
 An R package for **GLM-based non-life insurance pricing analysis**. It covers the
 standard workflow around a frequency/severity model pair: one-way exploration,
 actual-vs-expected checks, partial dependence plots, model diagnostics
-(dispersion, binned residuals, interaction detection), the construction of a
-multiplicative rating table with thin-cell flags, premium-impact (dislocation)
-analysis,
-and deliverables — a formatted Excel rating workbook and a one-call HTML
-report — all with interactive plotly visualisations.
+(dispersion, binned residuals, collinearity, interaction detection),
+portfolio-level model comparison (lift, Gini, double lift), the construction
+of a multiplicative rating table with thin-cell flags, premium-impact
+(dislocation) analysis, and deliverables — a formatted Excel rating workbook
+and a one-call HTML report — all with interactive plotly visualisations.
 
 All plots follow a consistent house style (navy/blue/gold palette, exposure bars
 on a secondary axis, horizontal legends) and export to PNG via the plotly mode bar.
@@ -29,12 +29,15 @@ on a secondary axis, horizontal legends) and export to PNG via the plotly mode b
   - [`make_pdp()`](#make_pdp)
   - [`plot_glm_predictor()`](#plot_glm_predictor)
   - [`glm_diagnostics()`](#glm_diagnostics)
+  - [`glm_collinearity()`](#glm_collinearity)
   - [`plot_glm_residuals()`](#plot_glm_residuals)
   - [`detect_interactions()`](#detect_interactions)
   - [`plot_residual_heatmap()`](#plot_residual_heatmap)
   - [`screen_features()`](#screen_features)
   - [`make_rating_table()`](#make_rating_table)
   - [`make_rating_plot()`](#make_rating_plot)
+  - [`model_lift()`](#model_lift)
+  - [`double_lift()`](#double_lift)
   - [`premium_impact()`](#premium_impact)
   - [`export_rating_table()`](#export_rating_table)
   - [`pricing_report()`](#pricing_report)
@@ -396,6 +399,33 @@ overdispersion warning**: the point estimates are still consistent, but
 standard errors are understated, so consider a quasi-Poisson or negative
 binomial family before reading anything into term significance.
 
+### `glm_collinearity()`
+
+Generalised variance inflation factor per **term**.
+
+```r
+glm_collinearity(model, threshold = 3)
+```
+
+A plain VIF is meaningless for a pricing model, where a spline or a factor
+spans several columns. This uses the generalised form of Fox and Monette,
+with `GVIF^(1/(2·DF))` putting multi-column terms back on a comparable
+scale. Read that column like a VIF on the square-root scale: the default
+threshold of 3 corresponds to a VIF of about 9.
+
+A high value means the term is largely explained by the others, so its
+coefficient is unstable and **its rating factors cannot be read on their
+own** — even though the model's overall predictions may be perfectly fine.
+That distinction matters: collinearity damages interpretation, not
+prediction, and a rating table is an interpretation.
+
+**Returns** a data.frame with `Term`, `DF`, `GVIF`, `GVIF_scaled` and
+`Flag`, ordered by `GVIF_scaled`, plus a warning naming the flagged terms.
+
+> This is the model-level counterpart of the near-duplicate warning in
+> [`screen_features()`](#screen_features): that one catches correlated
+> *candidates* before they go in, this one catches them once both are in.
+
 ### `plot_glm_residuals()`
 
 Binned residual plot — the readable alternative to raw residual plots, which
@@ -636,6 +666,81 @@ connected by a line), with the thin level's markers faded:
 For a continuous variable and an interaction, see the
 [Gallery](#gallery).
 
+### `model_lift()`
+
+Lift chart and Gini — does the model separate risk across the whole book?
+
+```r
+model_lift(model_freq = NULL, model_sev = NULL, data = NULL,
+           actual_col = "SCHADELAST", exposure_col = "Exposure",
+           n_bins = 10, y_range = NULL)
+```
+
+Every other diagnostic in the package looks at one variable or one pair.
+This one asks the portfolio-level question: sort the book by predicted risk
+premium, split it into bins of **equal exposure**, and compare actual with
+predicted in each. A rising actual line that tracks the predicted one means
+the model orders risk; a flat actual line means it orders nothing.
+
+Equal exposure rather than equal policy counts, so every point carries the
+same weight — and since both series are in the same units they share one
+axis, with no exposure bars needed.
+
+`gini` is computed on the exposure-weighted Lorenz curve. It measures
+**ordering only**: a model can have an excellent Gini and still be badly
+calibrated, which is exactly what the lift chart itself reveals.
+
+**Returns** `table` (one row per bin), `gini`, `stats`, `plot` (the lift
+chart) and `plot_lorenz`.
+
+![Lift chart](man/figures/README-lift.png)
+
+> **Units must match.** Use claim counts with a frequency model and loss
+> amounts with a severity or risk premium model. If the overall A/E comes
+> out far from 1 the function warns, because that nearly always means
+> `actual_col` and the prediction are different quantities.
+
+> `data = NULL` evaluates on the model's own rows — in-sample, and labelled
+> as such on the plot. Pass a holdout to `data` for an honest
+> out-of-sample lift.
+
+### `double_lift()`
+
+Which of two tariffs is right where they disagree.
+
+```r
+double_lift(data, model_freq_new = NULL, model_sev_new = NULL,
+            model_freq_old = NULL, model_sev_old = NULL,
+            old_premium_col = NULL,
+            old_premium_basis = c("amount", "rate"),
+            actual_col = "SCHADELAST", exposure_col = "Exposure",
+            n_bins = 10, rebase = TRUE, y_range = NULL)
+```
+
+Takes the same arguments as [`premium_impact()`](#premium_impact) — either
+two model sets or a current premium column. It sorts by the **ratio** of
+the two predicted rates, bins by equal exposure, and plots the A/E of each
+model per bin with a reference line at 1.0.
+
+This is the test a single lift chart cannot do. Both models can look
+convincing on their own lift chart while disagreeing sharply about
+individual policies, and only their disagreement decides which is right.
+The end bins are where they differ most; the model whose line stays closer
+to 1.0 across the range wins.
+
+Both sides are rebased to the same total by default, so the chart is about
+**differentiation, not rate level**.
+
+**Returns** `table` (per bin: exposure, mean rate ratio, and the A/E of
+each model), `stats` (including `mad_new`, `mad_old` and `winner` — the
+mean absolute distance from 1.0 of each model) and `plot`.
+
+Below, the full frequency model against a region-only tariff. The old
+tariff drifts from 0.78 to 1.36 across the bins — it is systematically
+wrong exactly where the two disagree — while the candidate stays near 1.0:
+
+![Double lift chart](man/figures/README-double-lift.png)
+
 ### `premium_impact()`
 
 Dislocation analysis: per-policy comparison of premiums under a new model
@@ -648,7 +753,8 @@ premium_impact(data,
                old_premium_col = NULL,
                old_premium_basis = c("amount", "rate"),
                rebase = TRUE, by = NULL, n_show = 10,
-               exposure_col = "Exposure")
+               exposure_col = "Exposure", spotlight = NULL,
+               x_range = NULL, y_range = NULL)
 ```
 
 Premiums are computed as **rates per unit of exposure** (offsets neutralised
@@ -671,6 +777,39 @@ a named list), `policy` (per-row old/new/percent change),
 marked).
 
 ![Premium impact histogram](man/figures/README-premium-impact.png)
+
+**Who drives the change.** With `by`, each level gets `ExposureShare`,
+`MeanChangePct` and `Contribution = share × change`. The contributions of
+one variable's levels **sum to the portfolio change**, which answers the
+question a pricing committee actually asks: not "how much does this segment
+move" but "how much of our +10.5% comes from it".
+
+**Spotlighting a subset.** `spotlight` takes an expression evaluated
+against `data`, or a logical vector:
+
+```r
+imp <- premium_impact(dat, model_freq_new = m_freq, model_sev_new = m_sev,
+                      old_premium_col = "PREMIUM",
+                      spotlight = REGION == "City" & AGE < 25)
+imp$spotlight$summary
+```
+
+It is deliberately a **spotlight and not a filter**: the whole book is
+still analysed, the subset appears as a second series on the histogram, and
+`$spotlight` reports its exposure share, mean and median change, and its
+contribution to the portfolio total. Filtering would remove exactly the
+context you need — that a segment moves +18% while the book moves +2%.
+
+Its statistics are computed **after** the book-level rebase, because the
+rebase is a decision about the whole portfolio. Rebasing within the subset
+would force every segment to average out at zero and tell you nothing.
+
+> **No mix effect here.** Old and new premiums are compared on the *same*
+> policies, so the portfolio composition is identical on both sides and
+> there is nothing to decompose into rate versus mix. `Contribution`
+> answers which segment drives the change, not how much of it is mix. A
+> genuine mix-shift analysis needs two portfolio snapshots and is a
+> different calculation.
 
 ### `export_rating_table()`
 
@@ -742,6 +881,9 @@ exposure or prior weight, `a` and `e` actual and expected claims in a cell.
 | [`plot_glm_predictor()`](#plot_glm_predictor) | actual vs expected per bin | counts: `Σy/Σw` against `Σμ/Σw`; weighted models: prior-weight-weighted means | log link, to recover exposure as `exp(offset)` |
 | [`make_pdp()`](#make_pdp) | the partial effect on the response scale | weighted mean of `predict(type = "response")` per grid point, exposure set to 1 → [why](#why-the-pdp-is-computed-on-the-response-scale) | offset is `log(exposure)` |
 | [`glm_diagnostics()`](#glm_diagnostics) | fit and dispersion | Pearson `χ²/df`; `1 − D/D₀` | → [overdispersion](#overdispersion) |
+| [`glm_collinearity()`](#glm_collinearity) | how far each term is explained by the others | generalised VIF, `GVIF^(1/(2·DF))` | terms, not coefficients |
+| [`model_lift()`](#model_lift) | risk separation across the book | `Σactual/Σw` against `Σpred/Σw` per equal-exposure bin; Gini on the Lorenz curve | → [what lift measures](#what-lift-and-gini-do-and-do-not-measure) |
+| [`double_lift()`](#double_lift) | which of two tariffs is right where they differ | A/E of each model per bin of the rate ratio `new/old` | rebased to equal totals |
 | [`plot_glm_residuals()`](#plot_glm_residuals) | binned residuals | mean residual per bin, band `±2·√(φ/n)` | the dispersion estimate `φ` |
 | [`detect_interactions()`](#detect_interactions) | interaction structure the GLM missed | `D = 2·Σ[a·log(a/e*) − (a − e*)]`, where `e*` is `e` raked to `a`'s margins; null by simulation → [why](#why-a-one-way-check-cannot-see-an-interaction) | Poisson counts (otherwise `χ²` scaled by `φ`) |
 | [`plot_residual_heatmap()`](#plot_residual_heatmap) | A/E per cell | `Σa / Σe` per cell of two variables | — |
@@ -862,6 +1004,47 @@ so a factor of 1.4 on 12 claims is never read with the same confidence as
 one on 12,000. What to do about it (grouping the level with a related one,
 capping the factor, or leaving it out of the tariff) stays a judgement
 call; the package only flags it.
+
+### What lift and Gini do and do not measure
+
+A Gini measures **ordering**, nothing else. It asks whether the policies
+the model calls expensive really are, relative to the ones it calls cheap.
+It says nothing about whether the level is right: multiply every prediction
+by three and the Gini is unchanged while the tariff is ruinous. The lift
+chart is what catches that, because it puts actual and predicted on the
+same axis, per bin.
+
+So read them together: **Gini for discrimination, the lift chart for
+calibration.** A model can be excellent at one and poor at the other.
+
+A single lift chart also cannot rank two candidates. Both can look
+convincing separately while disagreeing sharply about individual policies,
+and the disagreement is the whole question. That is what
+[`double_lift()`](#double_lift) isolates: it bins on the ratio of the two
+predictions, so the end bins contain exactly the policies where the models
+part company, and the A/E lines show who is right there.
+
+Two cautions. Lift on the training data flatters both models, which is why
+`data` is exposed for a holdout — it will not stop you, but it will label
+the plot in-sample. And `double_lift()` rebases the two sides to the same
+total by default: without that, a candidate that is simply 10% cheaper
+everywhere would look systematically better, when the comparison is about
+differentiation rather than rate level.
+
+### Collinearity
+
+Collinearity does not damage predictions; it damages **interpretation**. A
+GLM with two near-duplicate predictors can fit and forecast perfectly well
+while splitting the effect between them arbitrarily, so the individual
+coefficients — and therefore the rating factors — swing wildly with small
+changes in the data.
+
+That matters here specifically because a rating table *is* an
+interpretation: [`make_rating_table()`](#make_rating_table) reads each
+term's coefficients back out as relativities. If two terms are collinear,
+those two columns of the table are not trustworthy even though the model
+is fine. [`glm_collinearity()`](#glm_collinearity) is the check, on the
+generalised VIF scale because pricing terms span multiple columns.
 
 ### Overdispersion
 
@@ -1225,6 +1408,125 @@ term selection on naive p-values is anti-conservative.
 
 ---
 
+### `glm_collinearity()` specification
+
+**Purpose.** Generalised variance inflation factor per model term.
+
+```r
+glm_collinearity(model, threshold = 3)
+```
+
+| Argument | Type | Default | Meaning |
+|---|---|---|---|
+| `model` | glm | — | must have at least two terms |
+| `threshold` | numeric(1) | `3` | flag terms at or above this `GVIF_scaled` |
+
+**Algorithm.** Take `vcov(model)`, drop the intercept and any aliased
+coefficients (matched by name, so a rank-deficient fit does not break it),
+and convert to a correlation matrix `R`. For each term with column set
+`S`:
+
+```
+GVIF = det(R[S,S]) · det(R[-S,-S]) / det(R)
+GVIF_scaled = GVIF^(1/(2·DF))
+```
+
+This is Fox and Monette's generalisation: for a single-column term it
+reduces to the ordinary VIF, and the scaled form makes terms of different
+width comparable.
+
+**Returns.** A data.frame `Term`, `DF`, `GVIF`, `GVIF_scaled`, `Flag`,
+sorted by `GVIF_scaled` descending. Zero rows with a message when the
+model has fewer than two estimable terms.
+
+**Warnings.** Flagged terms are named. A singular correlation matrix —
+itself a sign of exact collinearity — returns zero rows with a warning
+rather than a numerical error.
+
+**Interpretation.** `GVIF_scaled` is on the square-root scale, so 3
+corresponds to a VIF of roughly 9. High values invalidate the *individual*
+factors of that term, not the model's predictions.
+
+**Cost.** One `vcov()` plus a determinant per term; negligible.
+
+---
+
+### `model_lift()` specification
+
+**Purpose.** Lift chart and Gini for a risk premium model.
+
+```r
+model_lift(model_freq = NULL, model_sev = NULL, data = NULL,
+           actual_col = "SCHADELAST", exposure_col = "Exposure",
+           n_bins = 10, y_range = NULL)
+```
+
+| Argument | Type | Default | Meaning |
+|---|---|---|---|
+| `model_freq`, `model_sev` | glm or NULL | `NULL` | supply both for a risk premium, one for a frequency- or severity-only lift |
+| `data` | data.frame or NULL | `NULL` | evaluation data; `NULL` uses the model's own rows (in-sample, labelled on the plot) |
+| `actual_col` | character(1) | `"SCHADELAST"` | realised amount: loss for a premium model, claim count for a frequency model |
+| `n_bins` | integer | `10` | equal-exposure bins |
+
+**Algorithm.**
+
+1. Predict a rate per unit of exposure from each model with the offset
+   neutralised, and multiply them.
+2. Drop rows with non-finite values or non-positive exposure, with a
+   warning counting them.
+3. Order by predicted rate and assign bins by **cumulative exposure**, so
+   each bin holds `1/n_bins` of the book.
+4. Per bin: `ActualRate = Σactual / Σw`, `PredictedRate = Σ(rate·w) / Σw`,
+   `AE` their ratio.
+5. Gini from the exposure-weighted Lorenz curve: with `x` the cumulative
+   exposure share and `y` the cumulative loss share, both ordered by the
+   prediction, `Gini = 1 − 2·∫y dx` by the trapezoid rule.
+
+**Returns.** `table` (`Bin`, `Exposure`, `ExposureShare`, `ActualRate`,
+`PredictedRate`, `AE`), `gini`, `stats` (including `in_sample`), `plot`,
+`plot_lorenz`.
+
+**Assumptions.** Log link, so `exp(offset)` is an exposure. The actual and
+the prediction must be in the same units — pass `actual_col` accordingly.
+
+**Cost.** One prediction pass plus a sort, O(n log n).
+
+---
+
+### `double_lift()` specification
+
+**Purpose.** Compare two tariffs where they disagree.
+
+```r
+double_lift(data, model_freq_new = NULL, model_sev_new = NULL,
+            model_freq_old = NULL, model_sev_old = NULL,
+            old_premium_col = NULL,
+            old_premium_basis = c("amount", "rate"),
+            actual_col = "SCHADELAST", exposure_col = "Exposure",
+            n_bins = 10, rebase = TRUE, y_range = NULL)
+```
+
+**Algorithm.** Compute both rates through the same helper
+[`premium_impact()`](#premium_impact) uses, so the two cannot drift apart.
+Rebase the new rates by `Σ(old·w) / Σ(new·w)` when `rebase = TRUE`. Order
+by `ratio = new/old`, bin by equal exposure, and per bin compute the A/E
+of each model. `mad_new` and `mad_old` are the mean absolute distance of
+those A/E series from 1.0, and `winner` names the smaller.
+
+**Returns.** `table` (`Bin`, `Exposure`, `RateRatio`, `ActualRate`,
+`AE_New`, `AE_Old`), `stats` (`mad_new`, `mad_old`, `winner`,
+`rate_level_change`), `plot`.
+
+**Interpretation.** The end bins carry the policies where the tariffs
+differ most; that is where the comparison is decided. `mad_*` is a summary
+of the picture, not a substitute for it — look at *where* a model drifts,
+not only how far.
+
+**Errors.** No new model; neither old models nor `old_premium_col`; both
+supplied at once; `n_bins < 2`; no usable rows.
+
+---
+
 ### `plot_glm_residuals()` specification
 
 **Purpose.** Binned residual plot — readable where a raw residual plot is
@@ -1559,6 +1861,7 @@ premium_impact(data, model_freq_new = NULL, model_sev_new = NULL,
 | `rebase` | logical(1) | `TRUE` | scale new premiums so the exposure-weighted totals match the old |
 | `by` | character or NULL | `NULL` | columns for a per-level breakdown |
 | `n_show` | integer | `10` | rows in the winners/losers tables |
+| `spotlight` | expression, logical or NULL | `NULL` | subset to report separately, evaluated against `data`; the book itself is still analysed in full |
 | `x_range`, `y_range` | numeric(2) or NULL | `NULL` | fix the histogram axes; `x_range` bounds the change axis and only sets the visible window — the bins always span the full range, so the statistics are unaffected |
 
 **Algorithm.** Predict both sides as rates per unit of exposure (offsets
