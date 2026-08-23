@@ -90,3 +90,22 @@ test_that("pricing_report writes a complete HTML report", {
   expect_true(grepl("Rating factors", html))
   expect_true(grepl("htmlwidget", html))
 })
+
+test_that("the one-way block covers severity, not just frequency", {
+  skip_if_not_installed("htmltools")
+  f_h <- file.path(tempdir(), "oneway.html")
+  suppressMessages(suppressWarnings(
+    pricing_report(m_freq, m_sev, dat, file = f_h, include = "oneway")))
+  html <- readChar(f_h, file.info(f_h)$size, useBytes = TRUE)
+  expect_true(grepl("One-way observed – frequency", html, useBytes = TRUE))
+  expect_true(grepl("One-way observed – severity", html, useBytes = TRUE))
+
+  # without a severity model there is nothing to read it against, so the
+  # heaviest block is not doubled for no reason
+  f_f <- file.path(tempdir(), "oneway_freq.html")
+  suppressMessages(suppressWarnings(
+    pricing_report(m_freq, NULL, dat, file = f_f, include = "oneway")))
+  html_f <- readChar(f_f, file.info(f_f)$size, useBytes = TRUE)
+  expect_true(grepl("One-way observed – frequency", html_f, useBytes = TRUE))
+  expect_false(grepl("One-way observed – severity", html_f, useBytes = TRUE))
+})

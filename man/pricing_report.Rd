@@ -38,7 +38,11 @@ variables of both models).}
 \item{include}{Which blocks to render: any of \code{"diagnostics"},
 \code{"oneway"}, \code{"ae"}, \code{"pdp"}, \code{"rating"}, \code{"interactions"} (default:
 all). The \code{"interactions"} block runs \code{\link[=detect_interactions]{detect_interactions()}} on the
-frequency model and plots the strongest pairs as A/E heatmaps.}
+frequency model and plots the strongest pairs as A/E heatmaps. The
+\code{"oneway"} block shows observed frequency, and observed severity as
+well when \code{model_sev} is supplied. Note that the observed severity
+reads \code{loss_col} as a \strong{total} loss amount, not an average per
+claim: it is aggregated as \code{sum(loss) / sum(claims)}.}
 
 \item{by_year}{Split the one-way plots by accounting year.}
 
@@ -57,8 +61,10 @@ Invisibly, the normalised path of the written file.
 \description{
 Bundles the whole analysis into a single self-browsable HTML report:
 model diagnostics (fit table + binned residuals) and, per variable,
-the one-way observed plot, actual vs expected, partial dependence and
+the one-way observed plots, actual vs expected, partial dependence and
 the rating-factor plot, plus a section with the interaction plots.
+Frequency and severity are shown side by side throughout, wherever the
+corresponding model is supplied.
 Individual plot failures are shown as a note instead of aborting the
 report.
 }

@@ -2,8 +2,10 @@
 #'
 #' Bundles the whole analysis into a single self-browsable HTML report:
 #' model diagnostics (fit table + binned residuals) and, per variable,
-#' the one-way observed plot, actual vs expected, partial dependence and
+#' the one-way observed plots, actual vs expected, partial dependence and
 #' the rating-factor plot, plus a section with the interaction plots.
+#' Frequency and severity are shown side by side throughout, wherever the
+#' corresponding model is supplied.
 #' Individual plot failures are shown as a note instead of aborting the
 #' report.
 #'
@@ -21,7 +23,11 @@
 #' @param include Which blocks to render: any of `"diagnostics"`,
 #'   `"oneway"`, `"ae"`, `"pdp"`, `"rating"`, `"interactions"` (default:
 #'   all). The `"interactions"` block runs [detect_interactions()] on the
-#'   frequency model and plots the strongest pairs as A/E heatmaps.
+#'   frequency model and plots the strongest pairs as A/E heatmaps. The
+#'   `"oneway"` block shows observed frequency, and observed severity as
+#'   well when `model_sev` is supplied. Note that the observed severity
+#'   reads `loss_col` as a **total** loss amount, not an average per
+#'   claim: it is aggregated as `sum(loss) / sum(claims)`.
 #' @param by_year Split the one-way plots by accounting year.
 #' @param top_interactions Number of pairs from the interaction scan to
 #'   plot as heatmaps (default 3).
@@ -163,13 +169,23 @@ pricing_report <- function(model_freq = NULL, model_sev = NULL, data,
 
   var_secs <- lapply(variables, function(v) {
     parts <- list(h$h2(id = paste0("var-", anchor(v)), v))
+    oneway <- function(metric, colr)
+      safe(make_plot(data, v, metric, colr, metric,
+                     display = "color", by_year = by_year,
+                     exposure_col = exposure_col, claims_col = claims_col,
+                     loss_col = loss_col, year_col = year_col))
     if ("oneway" %in% include)
       parts <- c(parts, list(
-        h$h3("One-way observed"),
-        safe(make_plot(data, v, "Frequency", ta_blue, "Frequency",
-                       display = "color", by_year = by_year,
-                       exposure_col = exposure_col, claims_col = claims_col,
-                       loss_col = loss_col, year_col = year_col))))
+        h$h3("One-way observed \u2013 frequency"),
+        oneway("Frequency", ta_blue)))
+    # Severity only alongside a severity model, the way the ae and pdp
+    # blocks gate theirs: on a frequency-only tariff there is nothing to
+    # read the observed severity against, and it doubles the heaviest
+    # block in the report.
+    if ("oneway" %in% include && !is.null(model_sev))
+      parts <- c(parts, list(
+        h$h3("One-way observed \u2013 severity"),
+        oneway("Severity", ta_gold)))
     if ("ae" %in% include && in_model_data(model_freq, v))
       parts <- c(parts, list(
         h$h3("Actual vs expected \u2013 frequency"),

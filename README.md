@@ -2053,7 +2053,17 @@ pricing_report(model_freq = NULL, model_sev = NULL, data,
 residuals), `"oneway"`, `"ae"`, `"pdp"` and `"rating"` per variable,
 and `"interactions"` (the scan table plus the strongest
 `top_interactions` pairs as heatmaps). `variables` defaults to every base
-variable of both models.
+variable of both models. `"oneway"`, `"ae"` and `"pdp"` each show
+frequency and severity side by side, whenever the corresponding model is
+supplied — so a frequency-only tariff produces half as many plots.
+
+**`loss_col` is a total, not an average.** The observed severity, both in
+the one-way block and behind the severity PDP, is aggregated as
+`sum(loss) / sum(claims)`. Pointing `loss_col` at an average-per-claim
+column runs without error and draws a line that is too low by roughly the
+mean claim count — and by a different factor in every group, so the shape
+is wrong too. If your data holds the average, reconstruct the total
+first: `data$SCHADELAST <- data$AVG_LOSS * data$AantalClaims`.
 
 **Robustness.** Each plot is wrapped: a failure becomes a visible note in
 the report instead of aborting the run.
