@@ -37,10 +37,13 @@
 #'   the range, rounded to a 1 / 2 / 5 times a power of ten, and never
 #'   fractional for a column that holds whole numbers. So an age runs 18,
 #'   19, 20 and a vehicle weight 800, 850, 900 rather than 19.2653 and
-#'   832.65. Pass a single number to force one step everywhere, or a named
-#'   vector for specific variables, e.g. `c(LEEFTIJD = 1, GEWICHT = 100)`.
-#'   The base point is snapped onto the grid, so the row with factor 1 is
-#'   a value you would actually quote.
+#'   832.65. Override it with a single number to force one step
+#'   everywhere, or with a named vector or list to set steps per variable:
+#'   `list(LEEFTIJD = 1, GEWICHT = 100)`. Naming only some variables is
+#'   fine, the rest keep the automatic step; a name that matches no
+#'   continuous variable is reported rather than ignored. The base point
+#'   is snapped onto the grid, so the row with factor 1 is a value you
+#'   would actually quote.
 #' @param min_claims Thin-cell threshold: levels/grid points backed by
 #'   fewer claims get `IsThin = TRUE` (default 30). A GLM applies no
 #'   shrinkage to a categorical level, so such a factor comes essentially
@@ -244,6 +247,22 @@ make_rating_table <- function(model_freq = NULL,
   }
   if (!length(uniq_bases))
     stop("make_rating_table: no usable variables found.")
+
+  # A misspelled name in grid_step would otherwise be ignored in silence,
+  # leaving the user convinced they had set a step they had not
+  if (!is.null(grid_step) && !is.null(names(grid_step))) {
+    named <- names(grid_step)[nzchar(names(grid_step))]
+    cont  <- Filter(function(b) !var_is_cat(b) && is.numeric(data[[b]]),
+                    uniq_bases)
+    unused <- setdiff(named, cont)
+    if (length(unused))
+      warning("make_rating_table: 'grid_step' names with no continuous ",
+              "variable to apply to, and therefore ignored: ",
+              paste(unused, collapse = ", "),
+              ". Continuous variables in this model: ",
+              if (length(cont)) paste(cont, collapse = ", ") else "none",
+              ".", call. = FALSE)
+  }
 
   # Two-way interaction pairs (base variables) from both models, deduplicated
   gather_pairs <- function() {

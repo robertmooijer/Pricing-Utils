@@ -50,10 +50,13 @@ picks a readable step per variable: roughly \code{grid_res} points across
 the range, rounded to a 1 / 2 / 5 times a power of ten, and never
 fractional for a column that holds whole numbers. So an age runs 18,
 19, 20 and a vehicle weight 800, 850, 900 rather than 19.2653 and
-832.65. Pass a single number to force one step everywhere, or a named
-vector for specific variables, e.g. \code{c(LEEFTIJD = 1, GEWICHT = 100)}.
-The base point is snapped onto the grid, so the row with factor 1 is
-a value you would actually quote.}
+832.65. Override it with a single number to force one step
+everywhere, or with a named vector or list to set steps per variable:
+\code{list(LEEFTIJD = 1, GEWICHT = 100)}. Naming only some variables is
+fine, the rest keep the automatic step; a name that matches no
+continuous variable is reported rather than ignored. The base point
+is snapped onto the grid, so the row with factor 1 is a value you
+would actually quote.}
 }
 \value{
 A data.frame with one row per level/grid point per variable

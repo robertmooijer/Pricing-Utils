@@ -120,6 +120,23 @@ test_that("grid_step can be set globally or per variable", {
 
   t2 <- make_rating_table(mg, NULL, data = dg, grid_step = 10)
   expect_equal(unique(diff(t2$LevelNum[t2$Variable == "GEWICHT"])), 10)
+
+  # a named list works the same as a named vector
+  t3 <- make_rating_table(mg, NULL, data = dg,
+                          grid_step = list(LEEFTIJD = 5, GEWICHT = 200))
+  expect_equal(t3$LevelNum, t1$LevelNum)
+
+  # naming only one variable leaves the rest on the automatic step
+  t4 <- make_rating_table(mg, NULL, data = dg, grid_step = list(LEEFTIJD = 5))
+  auto <- make_rating_table(mg, NULL, data = dg)
+  expect_equal(unique(diff(t4$LevelNum[t4$Variable == "LEEFTIJD"])), 5)
+  expect_equal(t4$LevelNum[t4$Variable == "GEWICHT"],
+               auto$LevelNum[auto$Variable == "GEWICHT"])
+
+  # a misspelled name is called out rather than ignored
+  expect_warning(make_rating_table(mg, NULL, data = dg,
+                                   grid_step = c(LEEFTJID = 5)),
+                 "no continuous variable")
 })
 
 test_that("the rating table carries no credibility columns", {

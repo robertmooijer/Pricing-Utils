@@ -615,14 +615,15 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
                   exposure_col = "Exposure", claims_col = "AantalClaims",
                   base_level = c("first", "exposure"),
                   trim = c(0, 1),
-                  min_claims = 30)
+                  min_claims = 30, grid_step = NULL)
 ```
 
 | Argument | Description |
 |---|---|
 | `model_freq`, `model_sev` | fitted glm objects (at least one; log link expected) |
 | `data` | original dataset — used for base values, grids and exposure |
-| `grid_res` | number of grid points for continuous variables |
+| `grid_res` | target number of grid points for continuous variables |
+| `grid_step` | step size for continuous grids; `NULL` picks a readable one — see [Readable grids](#readable-grids-for-continuous-variables) |
 | `base_level` | `"first"` = first factor level is the reference; `"exposure"` = the level with the largest exposure is the reference |
 | `trim` | quantile range for continuous grids, e.g. `c(0.005, 0.995)` to avoid outlier tails and spline extrapolation |
 | `min_claims` | thin-cell threshold: levels with fewer claims get `IsThin = TRUE` (categorical thin levels also raise a warning) |
@@ -640,6 +641,47 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
 | `Factor_Frequency`, `Factor_Severity`, `Factor_Premium` | multiplicative relativities vs the base; `Premium = Frequency × Severity`; a variable absent from a model gets the neutral factor 1 there |
 | `Uplift_Frequency`, `Uplift_Severity`, `Uplift_Premium` | interaction rows only: pure interaction effect = joint / (main<sub>x</sub> × main<sub>group</sub>); equals 1 everywhere when there is no interaction |
 | `IsThin` | `TRUE` when `ClaimCount < min_claims`; these levels are dimmed in `make_rating_plot()` and greyed out in the Excel export — see [Thin cells](#thin-cells) |
+
+#### Readable grids for continuous variables
+
+A tariff lists ages 18, 19, 20 and weights 800, 850, 900 — not 19.2653 and
+832.65. The grid therefore runs in steps you would quote, chosen per
+variable:
+
+1. take the (trimmed) range and aim at roughly `grid_res` points;
+2. round that raw step to a 1, 2 or 5 times a power of ten, the way an
+   axis picks its ticks;
+3. except that a whole-number column with at most `2 × grid_res` distinct
+   values is listed **value by value**, which is what gives an age per
+   year.
+
+The grid is then laid on whole multiples of the step, so the numbers read
+as round values rather than as an offset sequence. On the demo portfolio
+that gives:
+
+| Variable | Range | Step | Points |
+|---|---|---|---|
+| `LEEFTIJD` | 18–80 | 1 (every year) | 63 |
+| `GEWICHT` | 800–2400 | 50 | 33 |
+| `KILOMETRAGE` | 2000–86000 | 2000 | 43 |
+
+Set your own with `grid_step`, as one number for everything or per
+variable, as a vector or a list:
+
+```r
+make_rating_table(m_freq, m_sev, data = dat,
+                  grid_step = list(LEEFTIJD = 1, GEWICHT = 100))
+```
+
+Naming only some variables is fine — the rest keep the automatic step. A
+name that matches no continuous variable is reported rather than silently
+ignored, so a typo does not leave you thinking you set a step you did not.
+
+Two things the step does *not* know about. It is driven by the **range**,
+so a single outlier coarsens the grid for everyone — which is what `trim`
+is for, and trimming happens before the step is chosen. And it is not
+density- or curvature-aware: a spline that bends sharply at young ages
+gets the same resolution as the flat stretch above 40.
 
 **Offsets and the base point.** Every variable the model offsets on is held
 at 1 in the base row, so `intercept × factors` is a rate per unit of
@@ -867,9 +909,22 @@ The workbook contains:
 
 - **Overview** — timestamp, the intercepts (per unit of exposure) and the
   base value per variable;
+- **Tariff** — every factor of every variable under one another with a
+  single `Key` column (`Variable|Level`, plus the group for interaction
+  rows), so a premium can be assembled with `VLOOKUP` instead of hopping
+  between sheets:
+
+  ```
+  =VLOOKUP("LEEFTIJD|"&B2; Tariff!A:H; 8; FALSE)
+  ```
+
+  Multiply the intercept from Overview by one factor per variable and you
+  have the risk premium per unit of exposure — verified to reproduce the
+  model prediction to machine precision;
 - **one sheet per main-effect variable** — level, exposure, claim count
   and the factor columns; the base row is highlighted, thin rows are
-  greyed out;
+  greyed out. Continuous levels are written as **numbers**, so Excel does
+  not flag them as "number stored as text";
 - **one sheet per interaction** — the long table plus a Level × Group
   matrix of the premium factor, ready for tariff implementation.
 
