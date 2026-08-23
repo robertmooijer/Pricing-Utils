@@ -53,9 +53,11 @@ on a large portfolio this is much the cheapest lever: every stage
 reported deviances then refer to the sample.}
 
 \item{nthread}{Threads for boosting. \code{NULL} (default) uses one fewer
-than the available cores. Boosting dominates the runtime, so this is
-the second lever: on an eight-core machine the measured gain over a
-single-threaded run is more than a factor of two.}
+than the available cores, capped by \code{OMP_THREAD_LIMIT} and reduced to
+2 under \verb{R CMD check}, which limits what a package may claim. Boosting
+dominates the runtime, so this is the second lever: on an eight-core
+machine the measured gain over a single-threaded run is more than a
+factor of two.}
 
 \item{seed}{Optional seed for the sample, the split and the boosting.}
 }

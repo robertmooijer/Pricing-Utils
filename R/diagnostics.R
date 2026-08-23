@@ -91,41 +91,78 @@ glm_collinearity <- function(model, threshold = 3) {
                       Flag = logical(0), stringsAsFactors = FALSE))
   }
 
-  v  <- stats::vcov(model)
-  as_ <- attr(stats::model.matrix(model), "assign")
-  nm <- colnames(stats::model.matrix(model))
-  # Aliased coefficients are dropped from vcov, so line the two up by name
-  keep <- nm %in% rownames(v) & as_ != 0
+  empty <- data.frame(Term = character(0), DF = integer(0),
+                      GVIF = numeric(0), GVIF_scaled = numeric(0),
+                      Flag = logical(0), stringsAsFactors = FALSE)
+
+  v   <- stats::vcov(model)
+  mm  <- stats::model.matrix(model)
+  as_ <- attr(mm, "assign")
+  nm  <- colnames(mm)
+  cf  <- stats::coef(model)
+
+  # A rank-deficient fit leaves aliased coefficients as NA, and vcov may
+  # keep them with a zero or NA variance; cov2cor() then quietly turns the
+  # whole matrix into NA. Drop them on the coefficients themselves.
+  est  <- !is.na(cf[match(nm, names(cf))]) & nm %in% rownames(v)
+  n_alias <- sum(as_ != 0 & !est)
+  if (n_alias > 0)
+    warning("glm_collinearity: ", n_alias, " coefficient(s) could not be ",
+            "estimated and were dropped; the model is rank deficient, ",
+            "which is itself exact collinearity.", call. = FALSE)
+  keep <- as_ != 0 & est
   as_  <- as_[keep]
   v    <- v[nm[keep], nm[keep], drop = FALSE]
+  dg   <- diag(v)
+  good <- is.finite(dg) & dg > 0
+  if (any(!good)) {
+    warning("glm_collinearity: ", sum(!good), " coefficient(s) have no ",
+            "usable variance and were dropped; the model is rank ",
+            "deficient.", call. = FALSE)
+    as_ <- as_[good]
+    v   <- v[good, good, drop = FALSE]
+  }
   if (!length(as_) || length(unique(as_)) < 2) {
     message("glm_collinearity: fewer than two estimable terms.")
-    return(data.frame(Term = character(0), DF = integer(0),
-                      GVIF = numeric(0), GVIF_scaled = numeric(0),
-                      Flag = logical(0), stringsAsFactors = FALSE))
+    return(empty)
   }
 
-  R    <- stats::cov2cor(v)
-  detR <- det(R)
-  if (!is.finite(detR) || detR <= 0) {
+  R <- stats::cov2cor(v)
+  if (anyNA(R)) {
+    warning("glm_collinearity: the coefficient correlation matrix contains ",
+            "missing values; GVIF cannot be computed.", call. = FALSE)
+    return(empty)
+  }
+
+  # Log-determinants: with correlated spline bases the determinant of a
+  # 20-column correlation matrix underflows to zero long before the model
+  # is anywhere near singular.
+  logdet <- function(M) {
+    if (!nrow(M)) return(0)
+    dt <- determinant(M, logarithm = TRUE)
+    if (!is.finite(dt$modulus) || dt$sign <= 0) return(NA_real_)
+    as.numeric(dt$modulus)
+  }
+  ldR <- logdet(R)
+  if (!is.finite(ldR)) {
     warning("glm_collinearity: the coefficient correlation matrix is ",
             "singular, which is itself a sign of exact collinearity; ",
             "GVIF cannot be computed.", call. = FALSE)
-    return(data.frame(Term = character(0), DF = integer(0),
-                      GVIF = numeric(0), GVIF_scaled = numeric(0),
-                      Flag = logical(0), stringsAsFactors = FALSE))
+    return(empty)
   }
 
   ids <- sort(unique(as_))
   out <- do.call(rbind, lapply(ids, function(i) {
     sel  <- as_ == i
-    gvif <- det(R[sel, sel, drop = FALSE]) *
-            det(R[!sel, !sel, drop = FALSE]) / detR
+    gvif <- exp(logdet(R[sel, sel, drop = FALSE]) +
+                logdet(R[!sel, !sel, drop = FALSE]) - ldR)
     dfi  <- sum(sel)
     data.frame(Term = labs[i], DF = dfi, GVIF = gvif,
                GVIF_scaled = gvif^(1 / (2 * dfi)),
                stringsAsFactors = FALSE)
   }))
+  out <- out[is.finite(out$GVIF_scaled), , drop = FALSE]
+  if (!nrow(out)) return(empty)
   out$Flag <- out$GVIF_scaled >= threshold
   out <- out[order(-out$GVIF_scaled), ]
   rownames(out) <- NULL

@@ -1,13 +1,20 @@
 # ─────────────────────────────────────────────────────────────────────
-# GLM Utils — demo
+# pricingtoolsRmO — demo
 #
 # Simulates a realistic motor portfolio (100k policies, Dutch column
 # names matching the toolkit defaults), fits a frequency and a severity
-# model, and produces every deliverable of the toolkit:
+# model, and walks the whole workflow: diagnose the models, compare them
+# at portfolio level, build the tariff, and measure what it does to the
+# book. Produces:
 #
 #   demo/pricing_report.html   full interactive HTML report
 #   demo/rating_table.xlsx     formatted Excel rating workbook
 #   demo/premium_impact.html   dislocation histogram vs the "current" tariff
+#   demo/lift.html             lift chart and double lift
+#
+# For the interaction tooling (detect_interactions, plot_residual_heatmap
+# and feature screening) see demo/detect_interactions.R, which is built
+# around a portfolio with a known missing interaction.
 #
 # Built-in demo talking points:
 #   * BRANDSTOF = "Waterstof" is deliberately rare (~10-15 claims):
@@ -82,7 +89,36 @@ m_sev <- glm(AvgLoss ~ ns(GEWICHT, 3) + BRANDSTOF,
 
 cat("── Model diagnostics ──────────────────────────────\n")
 print(glm_diagnostics(m_freq, m_sev), digits = 4)
+
+# Collinearity is about interpretation, not prediction: a term that is
+# largely explained by the others still forecasts fine, but its rating
+# factors cannot be read on their own.
+# This model carries both ns(LEEFTIJD, 5) and LEEFTIJD:REGIO, so the
+# interaction and the region main effect share information - which is
+# exactly what the generalised VIF is meant to surface.
+cat("\nCollinearity (generalised VIF per term):\n")
+print(glm_collinearity(m_freq), row.names = FALSE, digits = 4)
 cat("\n")
+
+# ── Does the model separate risk, and does it beat the incumbent? ─────
+cat("── Portfolio-level comparison ─────────────────────\n")
+lift <- model_lift(m_freq, m_sev, data = dat, actual_col = "SCHADELAST")
+cat(sprintf("Gini: %.3f  (0 = no discrimination)\n", lift$gini))
+print(lift$table, row.names = FALSE, digits = 4)
+
+# The current tariff only knows REGIO, so the two disagree sharply about
+# young city drivers - which is exactly where a double lift decides.
+dbl <- double_lift(dat, model_freq_new = m_freq, model_sev_new = m_sev,
+                   old_premium_col = "HUIDIGE_PREMIE",
+                   actual_col = "SCHADELAST")
+cat(sprintf("\nDouble lift - mean |A/E - 1|: new %.3f vs old %.3f -> %s wins\n",
+            dbl$stats$mad_new, dbl$stats$mad_old, dbl$stats$winner))
+print(dbl$table, row.names = FALSE, digits = 4)
+
+htmltools::save_html(htmltools::tagList(lift$plot, lift$plot_lorenz,
+                                        dbl$plot),
+                     "demo/lift.html", libdir = "lift_files")
+cat("\nWritten: demo/lift.html\n\n")
 
 # ── Rating table + Excel export ──────────────────────────────────────
 tbl <- make_rating_table(m_freq, m_sev, data = dat,
@@ -99,14 +135,21 @@ export_rating_table(tbl, "demo/rating_table.xlsx")
 cat("Written: demo/rating_table.xlsx\n\n")
 
 # ── Premium impact vs the current tariff ─────────────────────────────
+# The spotlight is the segment this tariff change is really about: young
+# drivers in the city, who the old REGIO-only tariff underprices.
 imp <- premium_impact(dat,
                       model_freq_new  = m_freq,
                       model_sev_new   = m_sev,
                       old_premium_col = "HUIDIGE_PREMIE",
-                      by = c("REGIO", "BRANDSTOF"))
+                      by = c("REGIO", "BRANDSTOF"),
+                      spotlight = REGIO == "Randstad" & LEEFTIJD < 25)
 cat("── Premium impact ─────────────────────────────────\n")
 print(imp$summary, row.names = FALSE)
-cat("\nMean change per level:\n")
+
+cat("\nSpotlight - young drivers in the Randstad:\n")
+print(imp$spotlight$summary, row.names = FALSE)
+
+cat("\nContribution per level (share x change; sums to the book change):\n")
 print(imp$by_level, row.names = FALSE, digits = 3)
 htmltools::save_html(imp$plot, "demo/premium_impact.html",
                      libdir = "premium_impact_files")

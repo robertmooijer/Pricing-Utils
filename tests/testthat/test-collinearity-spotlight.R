@@ -45,6 +45,27 @@ test_that("multi-column terms use the generalised form", {
             v$GVIF[v$Term == "ns(LEEFTIJD, 4)"])
 })
 
+test_that("splines and rank deficiency do not empty the table", {
+  # Many correlated spline columns: det(R) underflows to zero long before
+  # the model is singular, so the GVIF must be computed on log-determinants
+  m_sp <- glm(AantalClaims ~ ns(LEEFTIJD, 5) + ns(GEWICHT, 3) + REGIO +
+                offset(log(Exposure)), family = poisson(), data = dc)
+  v_sp <- glm_collinearity(m_sp)
+  expect_equal(nrow(v_sp), 3)
+  expect_true(all(is.finite(v_sp$GVIF_scaled)))
+  expect_false(any(v_sp$Flag))
+
+  # A rank-deficient fit leaves an aliased coefficient; it is dropped with
+  # a warning and the remaining terms still get a number
+  m_rd <- glm(AantalClaims ~ ns(LEEFTIJD, 5) + REGIO + LEEFTIJD:REGIO +
+                offset(log(Exposure)), family = poisson(), data = dc)
+  skip_if(sum(is.na(coef(m_rd))) == 0, "fit was not rank deficient here")
+  v_rd <- suppressWarnings(glm_collinearity(m_rd))
+  expect_gt(nrow(v_rd), 1)
+  expect_true(all(is.finite(v_rd$GVIF_scaled)))
+  expect_warning(glm_collinearity(m_rd), "rank")
+})
+
 test_that("a model with fewer than two terms returns nothing", {
   m1 <- glm(AantalClaims ~ LEEFTIJD + offset(log(Exposure)),
             family = poisson(), data = dc)
