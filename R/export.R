@@ -206,7 +206,11 @@ export_rating_table <- function(rating_tbl, file = "rating_table.xlsx",
       lv <- unique(d$Level); gv <- unique(d$Group)
       m  <- tapply(d[[fac_col]], list(factor(d$Level, levels = lv),
                                       factor(d$Group, levels = gv)), mean)
-      piv <- data.frame(Level = rownames(m), as.data.frame(m),
+      # rownames() is character even when the levels are numbers, which
+      # would put the matrix back in the "number stored as text" state the
+      # long table above it was just taken out of
+      rn  <- if (is.numeric(lv)) lv else rownames(m)
+      piv <- data.frame(Level = rn, as.data.frame(m),
                         check.names = FALSE, stringsAsFactors = FALSE)
       start <- nrow(d) + 3
       openxlsx::writeData(wb, sn,

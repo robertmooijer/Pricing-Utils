@@ -45,7 +45,9 @@ exposure-weighted totals match, isolating differentiation from level.}
 }
 \value{
 A list with \code{table} (per bin: exposure, the mean rate ratio, and
-the A/E of each model), \code{stats}, and \code{plot}.
+the A/E of each model), \code{stats}, and \code{plot}. \code{stats$rate_level_change}
+is measured before any rebasing, so it reports the difference in rate
+level whether or not \code{rebase} is in force.
 }
 \description{
 Sorts the portfolio by the ratio of the two predicted rates, bins it by

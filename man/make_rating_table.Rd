@@ -50,7 +50,11 @@ picks a readable step per variable: roughly \code{grid_res} points across
 the range, rounded to a 1 / 2 / 5 times a power of ten, and never
 fractional for a column that holds whole numbers. So an age runs 18,
 19, 20 and a vehicle weight 800, 850, 900 rather than 19.2653 and
-832.65. Override it with a single number to force one step
+832.65. A whole-number column with at most \code{2 * grid_res} distinct
+values is listed on those values instead of on a step, which is what
+gives an age per year and keeps a coded column (five sums insured
+spread over a million) to five rows. Override it with a single number
+to force one step
 everywhere, or with a named vector or list to set steps per variable:
 \code{list(LEEFTIJD = 1, GEWICHT = 100)}. Naming only some variables is
 fine, the rest keep the automatic step; a name that matches no
@@ -82,7 +86,11 @@ per exposure unit. A variable that is absent from one of the two models
 gets the neutral factor 1 there (so \code{Factor_Premium} remains correct).
 
 Interaction rows contain the joint relativity relative to the base cell
-and the pure uplift: joint / (main_factor_x * main_factor_group).
+and the pure uplift: joint / (main_factor_x * main_factor_group). They
+carry exposure and claim counts per cell whatever the types of the two
+variables: a continuous variable is binned onto its own grid first, the
+same way the one-way exposure histogram is built. Interaction cells are
+where a portfolio runs out of data, so \code{IsThin} matters most there.
 
 Levels backed by fewer than \code{min_claims} claims get \code{IsThin = TRUE}
 (thin categorical levels also raise a warning) and are dimmed in

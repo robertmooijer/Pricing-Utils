@@ -41,6 +41,22 @@ agg_all <- function(d, col, by_year,
               "' are ignored (na.rm = TRUE).", call. = FALSE)
   }
 
+  # The output columns are fixed names, so grouping on one of them would
+  # produce a data.frame with two columns of the same name rather than an
+  # error, and every later rename or lookup would then pick the wrong one.
+  clash <- intersect(c(col, if (by_year) year_col),
+                     c("Exposure", "ClaimCount", "Loss", "Frequency",
+                       "Severity", if (by_year) "Year"))
+  if (length(clash))
+    stop("agg_all: cannot group on '", paste(clash, collapse = ", "),
+         "', which is also the name of a column agg_all creates. Rename it ",
+         "first.", call. = FALSE)
+
+  if (by_year && identical(col, year_col))
+    stop("agg_all: 'col' and 'year_col' are both '", col,
+         "'; pass by_year = FALSE to group on the year itself.",
+         call. = FALSE)
+
   grp <- if (by_year) c(col, year_col) else col
   out <- d[, .(Exposure   = sum(get(exposure_col), na.rm = TRUE),
                ClaimCount = sum(get(claims_col),   na.rm = TRUE),

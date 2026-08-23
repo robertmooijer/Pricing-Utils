@@ -364,11 +364,20 @@ screen_features <- function(model, features = NULL,
   if (length(num_f) > 1) {
     cm <- suppressWarnings(stats::cor(d[, num_f, drop = FALSE],
                                       use = "pairwise.complete.obs"))
+    # A pair with no overlapping complete observations correlates to NA.
+    # which() ignores those, so pulling the values back out with the same
+    # logical mask returns one NA per skipped pair and shifts every value
+    # onto the wrong pair; index with the row/column pairs instead.
+    n_napair <- sum(is.na(cm[upper.tri(cm)]))
+    if (n_napair)
+      warning("screen_features: ", n_napair, " numeric pair(s) could not be ",
+              "correlated (no overlapping complete observations) and are ",
+              "not screened for near-duplication.", call. = FALSE)
     up <- which(upper.tri(cm) & abs(cm) >= cor_threshold, arr.ind = TRUE)
     if (nrow(up)) {
       correlated <- data.frame(
         VarX = num_f[up[, 1]], VarY = num_f[up[, 2]],
-        Correlation = round(cm[upper.tri(cm) & abs(cm) >= cor_threshold], 4),
+        Correlation = round(cm[up], 4),
         stringsAsFactors = FALSE)
       correlated <- correlated[order(-abs(correlated$Correlation)), ]
       rownames(correlated) <- NULL

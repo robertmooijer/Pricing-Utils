@@ -18,7 +18,12 @@ m_null <- glm(AantalClaims ~ 1 + offset(log(Exposure)),
 
 test_that("lift separates a real model from an empty one", {
   g <- model_lift(m_good, actual_col = "AantalClaims", data = dl)
-  z <- model_lift(m_null, actual_col = "AantalClaims", data = dl)
+  # the intercept-only model predicts one rate for everyone, so the ten
+  # bins are ten arbitrary slices of an identical prediction; that is
+  # exactly what the tie warning is for
+  expect_warning(z <- model_lift(m_null, actual_col = "AantalClaims",
+                                 data = dl),
+                 "only 1 distinct predicted value")
 
   expect_equal(nrow(g$table), 10)
   expect_gt(g$gini, 0.08)          # the real model orders risk
@@ -56,11 +61,37 @@ test_that("double lift prefers the model that is right where they differ", {
 })
 
 test_that("double lift against itself shows no winner and a flat A/E", {
-  dbl <- double_lift(dl, model_freq_new = m_good, model_freq_old = m_good,
-                     actual_col = "AantalClaims")
+  # comparing a model with itself gives every policy a ratio of exactly 1
+  expect_warning(dbl <- double_lift(dl, model_freq_new = m_good,
+                                    model_freq_old = m_good,
+                                    actual_col = "AantalClaims"),
+                 "only 1 distinct predicted value")
   expect_equal(dbl$table$AE_New, dbl$table$AE_Old, tolerance = 1e-10)
   expect_equal(dbl$stats$mad_new, dbl$stats$mad_old, tolerance = 1e-10)
   expect_lt(abs(dbl$stats$rate_level_change), 1e-10)
+})
+
+test_that("the rate level change is reported whether or not we rebase", {
+  # the level difference belongs to the two tariffs, not to the decision to
+  # rebase: deriving it from the scaling factor reported 0 for rebase =
+  # FALSE, which is the one case where the difference is still on screen
+  d2 <- dl
+  d2$OldPrem <- .model_rate(m_good, dl, "Exposure", "t") * 0.8 * dl$Exposure
+  f <- function(rb) double_lift(d2, model_freq_new = m_good,
+                                old_premium_col = "OldPrem",
+                                actual_col = "AantalClaims",
+                                rebase = rb)$stats$rate_level_change
+  expect_equal(f(TRUE),  0.25, tolerance = 1e-8)
+  expect_equal(f(FALSE), 0.25, tolerance = 1e-8)
+})
+
+test_that("a portfolio without losses gives NA rather than NaN for the Gini", {
+  d0 <- dl
+  d0$AantalClaims <- 0
+  g <- model_lift(m_good, actual_col = "AantalClaims", data = d0)
+  expect_true(is.na(g$gini))
+  expect_false(is.nan(g$gini))
+  expect_s3_class(g$plot, "plotly")
 })
 
 test_that("mismatched units are caught", {

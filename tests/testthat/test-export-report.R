@@ -63,6 +63,19 @@ test_that("continuous levels are written as numbers, not text", {
   expect_type(xi$Group, "character")
 })
 
+test_that("the matrix under an interaction keeps numeric levels too", {
+  skip_if_not_installed("openxlsx")
+  # the long table was taken out of "number stored as text" but the pivot
+  # below it still came from rownames(), which are always character
+  f3 <- file.path(tempdir(), "pivot.xlsx")
+  suppressWarnings(export_rating_table(tbl2, f3))
+  iv <- unique(tbl2$Variable[!is.na(tbl2$Group)])[1]
+  sn <- gsub("[^A-Za-z0-9 _.-]", "_", iv)
+  nr <- sum(tbl2$Variable == iv & !is.na(tbl2$Group))
+  piv <- openxlsx::read.xlsx(f3, sheet = sn, startRow = nr + 4)
+  expect_type(piv$Level, "double")
+})
+
 test_that("pricing_report writes a complete HTML report", {
   skip_if_not_installed("htmltools")
   f_h <- file.path(tempdir(), "report.html")

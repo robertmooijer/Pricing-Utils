@@ -13,7 +13,11 @@
 #' gets the neutral factor 1 there (so `Factor_Premium` remains correct).
 #'
 #' Interaction rows contain the joint relativity relative to the base cell
-#' and the pure uplift: joint / (main_factor_x * main_factor_group).
+#' and the pure uplift: joint / (main_factor_x * main_factor_group). They
+#' carry exposure and claim counts per cell whatever the types of the two
+#' variables: a continuous variable is binned onto its own grid first, the
+#' same way the one-way exposure histogram is built. Interaction cells are
+#' where a portfolio runs out of data, so `IsThin` matters most there.
 #'
 #' Levels backed by fewer than `min_claims` claims get `IsThin = TRUE`
 #' (thin categorical levels also raise a warning) and are dimmed in
@@ -37,7 +41,11 @@
 #'   the range, rounded to a 1 / 2 / 5 times a power of ten, and never
 #'   fractional for a column that holds whole numbers. So an age runs 18,
 #'   19, 20 and a vehicle weight 800, 850, 900 rather than 19.2653 and
-#'   832.65. Override it with a single number to force one step
+#'   832.65. A whole-number column with at most `2 * grid_res` distinct
+#'   values is listed on those values instead of on a step, which is what
+#'   gives an age per year and keeps a coded column (five sums insured
+#'   spread over a million) to five rows. Override it with a single number
+#'   to force one step
 #'   everywhere, or with a named vector or list to set steps per variable:
 #'   `list(LEEFTIJD = 1, GEWICHT = 100)`. Naming only some variables is
 #'   fine, the rest keep the automatic step; a name that matches no
@@ -215,11 +223,21 @@ make_rating_table <- function(model_freq = NULL,
       as.numeric(s)
     } else NA_real_
     int_data <- all(abs(x - round(x)) < 1e-9, na.rm = TRUE)
-    if (!is.finite(step)) {
-      inr  <- x >= rng[1] & x <= rng[2]
-      step <- .nice_step(rng, n_points, int_data,
-                         length(unique(x[inr & !is.na(inr)])))
+    inr <- x >= rng[1] & x <= rng[2]
+    uv  <- sort(unique(x[inr %in% TRUE]))
+    # A whole-number column with few enough distinct values is listed value
+    # by value, using those values rather than a step of 1 across the
+    # range: a coded column such as a sum insured can hold five values
+    # spread over a million, where stepping by 1 would build a grid of a
+    # million rows.
+    if (!is.finite(step) && .list_values(uv, n_points, int_data)) {
+      out <- list(values = uv,
+                  base = uv[which.min(abs(uv - med))],
+                  step = NA_real_)
+      assign(key, out, envir = grid_cache)
+      return(out)
     }
+    if (!is.finite(step)) step <- .nice_step(rng, n_points, int_data)
     # snap the base onto the same grid, so the sequence stays readable and
     # the row with factor 1 is a value someone would actually quote
     base <- .snap_to_step(med, step, rng[1], rng[2])
@@ -227,6 +245,22 @@ make_rating_table <- function(model_freq = NULL,
                 base = base, step = step)
     assign(key, out, envir = grid_cache)
     out
+  }
+
+  # Which grid point does each policy belong to? Categorical: its level.
+  # Continuous: the nearest grid value, splitting on the midpoints between
+  # them, the same rule the main-effect exposure histogram uses. Returns
+  # NA outside a trimmed range, so the volume of policies the grid does not
+  # cover is not swept into the edge cells.
+  cell_index <- function(bv, grid_vals, is_cat) {
+    if (is_cat) return(match(as.character(data[[bv]]),
+                             as.character(grid_vals)))
+    x <- data[[bv]]
+    brks <- c(-Inf, grid_vals[-1] - diff(grid_vals) / 2, Inf)
+    i <- findInterval(x, brks)
+    outside <- x < min(grid_vals) | x > max(grid_vals)
+    if (!isTRUE(all.equal(trim, c(0, 1)))) i[outside %in% TRUE] <- NA_integer_
+    i
   }
 
   # Base variables per model (interactions split up, deduplicated)
@@ -315,14 +349,8 @@ make_rating_table <- function(model_freq = NULL,
       # volume: the grid does not cover those policies, so neither should
       # the bars. The trimmed exposure is therefore below the portfolio
       # total by design.
-      brks <- c(-Inf, grid_vals[-1] - diff(grid_vals)/2, Inf)
-      bin  <- findInterval(data[[bv]], brks)
-      if (!isTRUE(all.equal(trim, c(0, 1)))) {
-        outside <- data[[bv]] < min(grid_vals) | data[[bv]] > max(grid_vals)
-        bin[outside %in% TRUE] <- NA_integer_
-      }
       ag   <- data.table::data.table(
-        bin        = bin,
+        bin        = cell_index(bv, grid_vals, FALSE),
         Exposure   = data[[exposure_col]],
         ClaimCount = data[[claims_col]]
       )[, .(Exposure   = sum(Exposure,   na.rm = TRUE),
@@ -341,7 +369,7 @@ make_rating_table <- function(model_freq = NULL,
     data.frame(
       Variable         = bv,
       Type             = if (is_cat) "categorical" else "continuous",
-      Level            = as.character(grid_vals),
+      Level            = .level_chr(grid_vals),
       LevelNum         = suppressWarnings(as.numeric(as.character(grid_vals))),
       Group            = NA_character_,
       IsBase           = is_base,
@@ -407,16 +435,24 @@ make_rating_table <- function(model_freq = NULL,
     xvals <- rep(gx, times = ng)        # X varies fastest (= predict_factor_2d)
     gvals <- rep(gg, each  = nx)
 
-    # Exposure/claims per cell: only meaningful for categorical x categorical
-    expo <- rep(NA_real_, nx * ng); clm <- rep(NA_real_, nx * ng)
-    if (cx && cg) {
-      ag <- d_dt[, .(E = sum(get(exposure_col), na.rm = TRUE),
-                     C = sum(get(claims_col),   na.rm = TRUE)), by = c(xv, gv)]
-      k  <- paste(as.character(ag[[xv]]), as.character(ag[[gv]]), sep = "\r")
-      ck <- paste(as.character(xvals),    as.character(gvals),    sep = "\r")
-      expo <- ag$E[match(ck, k)]; expo[is.na(expo)] <- 0
-      clm  <- ag$C[match(ck, k)]; clm[is.na(clm)]   <- 0
-    }
+    # Exposure and claims per cell. A continuous variable is binned onto its
+    # own grid first (same midpoint rule as the main-effect histogram), so
+    # the volume columns are filled for every combination of types rather
+    # than only for categorical x categorical. Interaction cells are exactly
+    # where a portfolio runs out of data, so this is the place the thin-cell
+    # flag earns its keep.
+    ci <- cell_index(xv, gx, cx)
+    cj <- cell_index(gv, gg, cg)
+    ag <- data.table::data.table(
+      ci = ci, cj = cj,
+      E  = data[[exposure_col]],
+      C  = data[[claims_col]]
+    )[!is.na(ci) & !is.na(cj),
+      .(E = sum(E, na.rm = TRUE), C = sum(C, na.rm = TRUE)), by = .(ci, cj)]
+    lin  <- (ag$cj - 1L) * nx + ag$ci          # X varies fastest
+    expo <- rep(0, nx * ng); clm <- rep(0, nx * ng)
+    expo[lin] <- ag$E
+    clm[lin]  <- ag$C
 
     ff <- predict_factor_2d(model_freq, xv, gx, gv, gg, i_base)
     fs <- predict_factor_2d(model_sev,  xv, gx, gv, gg, i_base)
@@ -430,9 +466,9 @@ make_rating_table <- function(model_freq = NULL,
     data.frame(
       Variable         = paste(b1, b2, sep = ":"),
       Type             = if (cx) "categorical" else "continuous",
-      Level            = as.character(xvals),
+      Level            = .level_chr(xvals),
       LevelNum         = suppressWarnings(as.numeric(as.character(xvals))),
-      Group            = as.character(gvals),
+      Group            = .level_chr(gvals),
       IsBase           = seq_len(nx * ng) == i_base,
       Exposure         = expo,
       ClaimCount       = clm,

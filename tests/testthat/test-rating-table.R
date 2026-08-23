@@ -139,6 +139,86 @@ test_that("grid_step can be set globally or per variable", {
                  "no continuous variable")
 })
 
+test_that("a wide integer column with few values is listed, not stepped", {
+  # A coded column such as a sum insured holds a handful of whole numbers
+  # spread over a million. Treating "few distinct values" as "step by 1"
+  # built a grid over the whole range - a million rows - instead of the
+  # five values that actually occur.
+  set.seed(21)
+  ng <- 3000
+  dg <- data.frame(
+    VERZBEDRAG = sample(c(0L, 100000L, 250000L, 500000L, 1000000L), ng, TRUE),
+    LEEFTIJD   = round(runif(ng, 18, 80)),
+    Exposure   = runif(ng, .3, 1))
+  dg$AantalClaims <- rpois(ng, dg$Exposure * .1)
+  mg <- glm(AantalClaims ~ VERZBEDRAG + LEEFTIJD + offset(log(Exposure)),
+            family = poisson(), data = dg)
+  tg <- make_rating_table(mg, NULL, data = dg)
+  lv <- function(v) tg$LevelNum[tg$Variable == v & is.na(tg$Group)]
+
+  expect_equal(lv("VERZBEDRAG"), sort(unique(dg$VERZBEDRAG)))
+  expect_lt(nrow(tg), 200)
+  # an age still runs year by year
+  expect_equal(unique(diff(lv("LEEFTIJD"))), 1)
+  # and there is still exactly one base row with a factor of 1
+  b <- tg[tg$Variable == "VERZBEDRAG" & tg$IsBase, ]
+  expect_equal(nrow(b), 1)
+  expect_equal(b$Factor_Frequency, 1)
+  expect_true(b$LevelNum %in% dg$VERZBEDRAG)
+})
+
+test_that("round large levels are not written in scientific notation", {
+  # as.character(1e5) is "1e+05", which is unusable both as a tariff level
+  # and as the lookup key the export builds from it
+  set.seed(22)
+  ng <- 2000
+  dg <- data.frame(BEDRAG = sample(c(100000L, 200000L, 1000000L), ng, TRUE),
+                   Exposure = runif(ng, .3, 1))
+  dg$AantalClaims <- rpois(ng, dg$Exposure * .1)
+  mg <- glm(AantalClaims ~ BEDRAG + offset(log(Exposure)),
+            family = poisson(), data = dg)
+  tg <- make_rating_table(mg, NULL, data = dg)
+  lvl <- tg$Level[tg$Variable == "BEDRAG"]
+  expect_false(any(grepl("e", lvl, fixed = TRUE)))
+  expect_identical(lvl, c("100000", "200000", "1000000"))
+  # Level and LevelNum must still describe the same value
+  expect_equal(as.numeric(lvl), tg$LevelNum[tg$Variable == "BEDRAG"])
+})
+
+test_that("interaction cells carry exposure and claims for any variable type", {
+  # Volume was filled only for categorical x categorical, so a continuous
+  # rating factor crossed with a region left Exposure, ClaimCount and
+  # IsThin empty - in the very cells where a portfolio runs thin
+  set.seed(23)
+  ng <- 8000
+  dg <- data.frame(LEEFTIJD = round(runif(ng, 18, 70)),
+                   REGIO = factor(sample(c("Noord", "Zuid"), ng, TRUE)),
+                   Exposure = runif(ng, .4, 1))
+  dg$AantalClaims <- rpois(ng, dg$Exposure * .15)
+  mg <- glm(AantalClaims ~ LEEFTIJD * REGIO + offset(log(Exposure)),
+            family = poisson(), data = dg)
+  tg <- suppressWarnings(make_rating_table(mg, NULL, data = dg))
+  ig <- tg[!is.na(tg$Group), ]
+
+  expect_gt(nrow(ig), 0)
+  expect_false(anyNA(ig$Exposure))
+  expect_false(anyNA(ig$ClaimCount))
+  expect_false(anyNA(ig$IsThin))
+  # every policy is counted exactly once across the cells
+  expect_equal(sum(ig$Exposure), sum(dg$Exposure), tolerance = 1e-8)
+  expect_equal(sum(ig$ClaimCount), sum(dg$AantalClaims))
+
+  # and a cell matches a hand count on the same grid
+  g   <- sort(unique(ig$LevelNum))
+  brk <- c(-Inf, g[-1] - diff(g) / 2, Inf)
+  nz  <- dg$REGIO == "Noord"
+  hand <- tapply(dg$Exposure[nz], findInterval(dg$LEEFTIJD[nz], brk), sum)
+  cel <- ig[ig$Group == "Noord", ]
+  cel <- cel[order(cel$LevelNum), ]
+  expect_equal(cel$Exposure[as.integer(names(hand))], as.vector(hand),
+               tolerance = 1e-8)
+})
+
 test_that("the rating table carries no credibility columns", {
   expect_false(any(grepl("^Credibility", names(tbl))))
   expect_null(attr(tbl, "credibility"))

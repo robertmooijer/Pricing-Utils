@@ -54,7 +54,14 @@ the prediction. Zero means the model does not discriminate at all;
 higher means it separates risk better. It measures \strong{ordering only} -
 a model can have an excellent Gini and still be badly calibrated, which
 is what the lift chart itself shows. Note this is not the classical
-income Gini, which orders by the variable being measured.
+income Gini, which orders by the variable being measured. A window with
+no losses at all has no Lorenz curve to measure, and \code{gini} is then
+\code{NA}.
+
+Bins are cut on the ordered predictions, so with fewer distinct
+predicted values than bins the policies sharing a prediction are split
+across bins in arbitrary order. That is reported with a warning rather
+than drawn as if the model had that resolution.
 }
 \seealso{
 \code{\link[=double_lift]{double_lift()}} to compare two candidate tariffs.

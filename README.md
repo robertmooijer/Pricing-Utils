@@ -637,7 +637,7 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
 | `Level`, `LevelNum` | level as text and (when applicable) numeric |
 | `Group`, `GroupVar`, `XVar` | interaction bookkeeping (`NA` for main effects) |
 | `IsBase` | `TRUE` on the base row/cell (factor exactly 1) |
-| `Exposure`, `ClaimCount` | data volume per level (per cell for cat × cat interactions) |
+| `Exposure`, `ClaimCount` | data volume per level, and per cell for interactions — a continuous variable is binned onto its own grid first, so the cells are filled whatever the two types are |
 | `Factor_Frequency`, `Factor_Severity`, `Factor_Premium` | multiplicative relativities vs the base; `Premium = Frequency × Severity`; a variable absent from a model gets the neutral factor 1 there |
 | `Uplift_Frequency`, `Uplift_Severity`, `Uplift_Premium` | interaction rows only: pure interaction effect = joint / (main<sub>x</sub> × main<sub>group</sub>); equals 1 everywhere when there is no interaction |
 | `IsThin` | `TRUE` when `ClaimCount < min_claims`; these levels are dimmed in `make_rating_plot()` and greyed out in the Excel export — see [Thin cells](#thin-cells) |
@@ -648,22 +648,28 @@ A tariff lists ages 18, 19, 20 and weights 800, 850, 900 — not 19.2653 and
 832.65. The grid therefore runs in steps you would quote, chosen per
 variable:
 
-1. take the (trimmed) range and aim at roughly `grid_res` points;
-2. round that raw step to a 1, 2 or 5 times a power of ten, the way an
-   axis picks its ticks;
-3. except that a whole-number column with at most `2 × grid_res` distinct
-   values is listed **value by value**, which is what gives an age per
-   year.
+1. a whole-number column with at most `2 × grid_res` distinct values is
+   listed **on those values**, which is what gives an age per year — and
+   what keeps a coded column such as a sum insured, five values spread
+   over a million, to five rows;
+2. otherwise take the (trimmed) range and aim at roughly `grid_res`
+   points;
+3. round that raw step to a 1, 2 or 5 times a power of ten, the way an
+   axis picks its ticks.
 
-The grid is then laid on whole multiples of the step, so the numbers read
-as round values rather than as an offset sequence. On the demo portfolio
-that gives:
+A stepped grid is then laid on whole multiples of the step, so the numbers
+read as round values rather than as an offset sequence. On the demo
+portfolio that gives:
 
 | Variable | Range | Step | Points |
 |---|---|---|---|
-| `LEEFTIJD` | 18–80 | 1 (every year) | 63 |
+| `LEEFTIJD` | 18–80 | every value | 63 |
 | `GEWICHT` | 800–2400 | 50 | 33 |
 | `KILOMETRAGE` | 2000–86000 | 2000 | 43 |
+
+Rule 1 works off the values, never off a step of 1 across the range —
+that distinction is the difference between a five-row grid and a
+million-row one for a column whose codes happen to be far apart.
 
 Set your own with `grid_step`, as one number for everything or per
 variable, as a vector or a list:
@@ -1629,7 +1635,9 @@ those A/E series from 1.0, and `winner` names the smaller.
 
 **Returns.** `table` (`Bin`, `Exposure`, `RateRatio`, `ActualRate`,
 `AE_New`, `AE_Old`), `stats` (`mad_new`, `mad_old`, `winner`,
-`rate_level_change`), `plot`.
+`rate_level_change`), `plot`. `rate_level_change` is measured before any
+rebasing, so it reports the level difference between the two tariffs
+whether or not `rebase` is in force.
 
 **Interpretation.** The end bins carry the policies where the tariffs
 differ most; that is where the comparison is decided. `mad_*` is a summary

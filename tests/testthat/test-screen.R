@@ -98,6 +98,37 @@ test_that("a single-level factor no longer breaks the design matrix", {
   expect_equal(sum(m$x), 5)                      # one indicator per row
 })
 
+test_that("an uncorrelatable pair does not corrupt the near-duplicate table", {
+  # which(arr.ind) skips NA correlations while the matching logical mask
+  # returns one NA per skipped pair, so the values shifted onto the wrong
+  # pairs and phantom rows appeared with VarX/VarY recycled
+  set.seed(31)
+  n <- 1500
+  dc <- data.frame(Exposure = runif(n, .5, 1))
+  dc$A <- rnorm(n)
+  dc$B <- dc$A * 3 + rnorm(n, 0, .01)             # genuine near-duplicate
+  dc$P <- ifelse(seq_len(n) <= n / 2, rnorm(n), NA)  # no overlap with Q
+  dc$Q <- ifelse(seq_len(n) >  n / 2, rnorm(n), NA)
+  dc$AantalClaims <- rpois(n, dc$Exposure * .12)
+  mc <- glm(AantalClaims ~ 1 + offset(log(Exposure)), family = poisson(),
+            data = dc)
+
+  r <- suppressWarnings(suppressMessages(screen_features(
+    mc, features = c("A", "B", "P", "Q"), n_shap = 0, nrounds = 20,
+    nthread = 2, seed = 1)))
+
+  expect_equal(nrow(r$correlated), 1)
+  expect_false(anyNA(r$correlated$Correlation))
+  expect_setequal(c(r$correlated$VarX, r$correlated$VarY), c("A", "B"))
+  expect_gt(abs(r$correlated$Correlation), 0.99)
+
+  # and the pair that could not be compared is reported rather than hidden
+  expect_warning(
+    screen_features(mc, features = c("A", "B", "P", "Q"), n_shap = 0,
+                    nrounds = 20, nthread = 2, seed = 1),
+    "could not be correlated")
+})
+
 test_that("unsupported families and bad splits are refused", {
   m_id <- glm(AantalClaims ~ LEEFTIJD, family = gaussian(), data = dscr)
   expect_error(screen_features(m_id), "supported")

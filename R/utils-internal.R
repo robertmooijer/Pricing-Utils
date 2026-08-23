@@ -147,18 +147,34 @@
 }
 
 # Predicted rate per unit of exposure. The offset is neutralised by setting
-# the exposure column to 1, so a frequency and a severity model multiply to
-# a risk premium per exposure unit. A NULL model contributes a factor 1.
+# the variable the model actually offsets on to 1, so a frequency and a
+# severity model multiply to a risk premium per exposure unit. A NULL model
+# contributes a factor 1.
+#
+# Neutralising `exposure_col` regardless would be wrong whenever the model
+# offsets on something else: a model fitted with offset(log(Ex)) alongside
+# an Exposure column would keep its offset intact and return a prediction
+# per record instead of a rate, silently, because the column being set to 1
+# is not the one in the linear predictor.
 .model_rate <- function(model, data, exposure_col, fn) {
   if (is.null(model)) return(rep(1, nrow(data)))
   nd <- data
   if (!is.null(model$offset)) {
-    if (exposure_col %in% names(nd)) {
-      nd[[exposure_col]] <- 1
+    ov  <- .offset_vars(model)
+    tgt <- if (length(ov)) ov else exposure_col
+    if (length(ov) && !exposure_col %in% ov)
+      warning(fn, ": the model offsets on '", paste(ov, collapse = ", "),
+              "' rather than on '", exposure_col, "'. That variable is the ",
+              "one held at 1, so the rates are per unit of it, while the ",
+              "weighting uses '", exposure_col, "'.", call. = FALSE)
+    hit <- intersect(tgt, names(nd))
+    if (!length(hit)) {
+      warning(fn, ": a model has an offset but none of its offset ",
+              "variable(s) (", paste(tgt, collapse = ", "), ") are in the ",
+              "data; the offset cannot be neutralised and the result is ",
+              "then not a rate per unit of exposure.", call. = FALSE)
     } else {
-      warning(fn, ": a model has an offset but column '", exposure_col,
-              "' is not in the data; rates are then not per unit of ",
-              "exposure.", call. = FALSE)
+      for (v in hit) nd[[v]] <- 1
     }
   }
   as.numeric(predict(model, newdata = nd, type = "response"))
@@ -212,7 +228,18 @@
 # Bins holding roughly equal exposure, ordered by `score`. Equal exposure
 # rather than equal policy counts, so every bin carries the same weight in
 # the comparison.
-.exposure_bins <- function(score, weight, n_bins) {
+#
+# Policies sharing a score are split across bins in whatever order they
+# happen to sit in, so with fewer distinct scores than bins the chart
+# invents a resolution the model does not have. That is worth saying out
+# loud rather than drawing.
+.exposure_bins <- function(score, weight, n_bins, fn = NULL) {
+  nd <- length(unique(score))
+  if (!is.null(fn) && nd < n_bins)
+    warning(fn, ": only ", nd, " distinct predicted value(s) for ", n_bins,
+            " bins, so policies with an identical prediction are split ",
+            "across bins in arbitrary order. Use n_bins <= ", nd,
+            " for bins that mean something.", call. = FALSE)
   o  <- order(score)
   cw <- cumsum(weight[o]) / sum(weight)
   b  <- pmin(n_bins, floor(cw * n_bins) + 1L)
@@ -226,6 +253,9 @@
 # 0 means no discrimination, higher means the model separates risk better.
 # Not the classical income Gini, which orders by the variable itself.
 .gini_exposure <- function(score, actual, weight) {
+  # Without losses the Lorenz curve has no vertical scale, and the naive
+  # formula returns NaN, which then prints as "NaN" in a chart title
+  if (!isTRUE(sum(actual) > 0)) return(NA_real_)
   o <- order(score)
   x <- cumsum(weight[o]) / sum(weight)
   y <- cumsum(actual[o]) / sum(actual)
@@ -239,18 +269,23 @@
 # rule an axis uses for its ticks, so a tariff lists ages 18, 19, 20 and
 # weights 800, 850, 900 rather than 19.2653 and 832.65. Integer-valued
 # columns never get a fractional step.
-.nice_step <- function(rng, n, integer_data, n_distinct = Inf) {
+.nice_step <- function(rng, n, integer_data) {
   span <- diff(rng)
   if (!is.finite(span) || span <= 0) return(NA_real_)
-  # A whole-number column with few enough values is listed value by value:
-  # a tariff wants every age, not every second age
-  if (integer_data && n_distinct <= 2 * max(1, n)) return(1)
   raw  <- span / max(1, n)
   mag  <- 10^floor(log10(raw))
   step <- mag * c(1, 2, 5, 10)[which(c(1, 2, 5, 10) >= raw / mag)[1]]
   if (integer_data) step <- max(1, round(step))
   step
 }
+
+# Should a whole-number column be listed value by value? A tariff wants
+# every age, not every second age. The decision is on the values, never on
+# a step of 1 across the range: a coded column such as a sum insured can
+# hold five values spread over a million, and stepping through that one
+# unit at a time would build a grid of a million rows.
+.list_values <- function(uv, n, integer_data)
+  integer_data && length(uv) && length(uv) <= 2 * max(1, n)
 
 # Grid over [lo, hi] in whole multiples of `step`, so the values read as
 # round numbers rather than as an offset sequence. `base` is added if the
@@ -262,6 +297,15 @@
   k_hi <- floor((hi + 1e-9) / step)
   g    <- if (k_hi >= k_lo) seq(k_lo, k_hi) * step else numeric(0)
   sort(unique(c(g, base)))
+}
+
+# Grid values as text for the Level column. as.character() switches a round
+# number to scientific notation whenever that is shorter, so a sum-insured
+# grid would read "1e+05", "2e+05" - unusable in a tariff and, worse, in
+# the lookup key built from it.
+.level_chr <- function(x) {
+  if (!is.numeric(x)) return(as.character(x))
+  format(x, scientific = FALSE, trim = TRUE, drop0trailing = TRUE)
 }
 
 # Snap a value onto the same multiples-of-step grid, clamped to the range

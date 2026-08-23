@@ -68,6 +68,15 @@ plot_glm_predictor <- function(model, predictor,
     stop(paste0("Predictor '", predictor, "' not found."))
   }
 
+  # model.frame() holds a spline or poly term as a matrix column, which
+  # would fail several frames further down with "replacement has 0 rows".
+  # Name the column to ask for instead.
+  if (!is.null(dim(x_values)))
+    stop("plot_glm_predictor: '", predictor, "' is a multi-column model ",
+         "term, not a single predictor. Plot the underlying variable ",
+         "instead, e.g. '", .term_base_var(predictor, tr$data), "'.",
+         call. = FALSE)
+
   # Determine weight/exposure vector + mode
   fam        <- family(model)
   has_offset <- !is.null(tr$offset) && any(tr$offset != 0)

@@ -23,7 +23,14 @@
 #' higher means it separates risk better. It measures **ordering only** -
 #' a model can have an excellent Gini and still be badly calibrated, which
 #' is what the lift chart itself shows. Note this is not the classical
-#' income Gini, which orders by the variable being measured.
+#' income Gini, which orders by the variable being measured. A window with
+#' no losses at all has no Lorenz curve to measure, and `gini` is then
+#' `NA`.
+#'
+#' Bins are cut on the ordered predictions, so with fewer distinct
+#' predicted values than bins the policies sharing a prediction are split
+#' across bins in arbitrary order. That is reported with a warning rather
+#' than drawn as if the model had that resolution.
 #'
 #' @param model_freq,model_sev Fitted glm objects. Supply both for a risk
 #'   premium, or one for a frequency- or severity-only lift. Offsets are
@@ -82,7 +89,7 @@ model_lift <- function(model_freq = NULL, model_sev = NULL, data = NULL,
 
   .check_ae_scale(sum(act), sum(rate * w), "model_lift", actual_col)
 
-  bin <- .exposure_bins(rate, w, n_bins)
+  bin <- .exposure_bins(rate, w, n_bins, "model_lift")
   agg <- data.table::data.table(bin = bin, w = w, act = act,
                                 pred = rate * w)[
     , .(Exposure = sum(w), Actual = sum(act), Predicted = sum(pred)),
@@ -199,7 +206,9 @@ model_lift <- function(model_freq = NULL, model_sev = NULL, data = NULL,
 #' @param y_range Optional `c(lo, hi)` to fix the A/E axis.
 #'
 #' @return A list with `table` (per bin: exposure, the mean rate ratio, and
-#'   the A/E of each model), `stats`, and `plot`.
+#'   the A/E of each model), `stats`, and `plot`. `stats$rate_level_change`
+#'   is measured before any rebasing, so it reports the difference in rate
+#'   level whether or not `rebase` is in force.
 #' @seealso [model_lift()], [premium_impact()]
 #' @export
 double_lift <- function(data,
@@ -236,11 +245,16 @@ double_lift <- function(data,
 
   .check_ae_scale(sum(act), sum(old * w), "double_lift", actual_col)
 
+  # The rate-level difference is a property of the two tariffs, not of the
+  # decision to rebase, so it is measured before any scaling. Deriving it
+  # from scale_f would report exactly 0 whenever rebase = FALSE, which is
+  # the one case where the level difference is still in the chart.
+  rate_level_change <- sum(new * w) / sum(old * w) - 1
   scale_f <- if (rebase) sum(old * w) / sum(new * w) else 1
   new     <- new * scale_f
   ratio   <- new / old
 
-  bin <- .exposure_bins(ratio, w, n_bins)
+  bin <- .exposure_bins(ratio, w, n_bins, "double_lift")
   agg <- data.table::data.table(
     bin = bin, w = w, act = act, ratio = ratio,
     pn = new * w, po = old * w)[
@@ -304,7 +318,7 @@ double_lift <- function(data,
 
   list(table = tbl,
        stats = list(mad_new = mad_new, mad_old = mad_old, winner = winner,
-                    rebase = rebase, rate_level_change = 1 / scale_f - 1,
+                    rebase = rebase, rate_level_change = rate_level_change,
                     n_bins = n_bins, n_rows = length(new),
                     n_dropped = n_drop),
        plot = p)

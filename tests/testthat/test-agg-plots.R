@@ -8,6 +8,28 @@ test_that("agg_all works with custom column names and validates input", {
                "DOES_NOT_EXIST")
 })
 
+test_that("grouping on a column agg_all creates is refused", {
+  # grouping on "Exposure" produced a data.frame with two columns of that
+  # name rather than an error, and every later lookup then picked one of
+  # them at random
+  d <- data.frame(Exposure = c(1, 1, 2), AantalClaims = c(0, 1, 2),
+                  SCHADELAST = c(0, 500, 900))
+  expect_error(agg_all(d, "Exposure", FALSE), "cannot group on")
+  expect_error(agg_all(dat, "BOEKJAAR", by_year = TRUE), "by_year = FALSE")
+})
+
+test_that("a multi-column model term is refused with a usable message", {
+  # model.frame() holds ns(LEEFTIJD, 4) as a matrix; without a check this
+  # failed several frames down with "replacement has 0 rows"
+  m <- glm(AantalClaims ~ ns(LEEFTIJD, 4) + offset(log(Exposure)),
+           family = poisson(), data = dat)
+  expect_error(plot_glm_predictor(m, "ns(LEEFTIJD, 4)"),
+               "multi-column model term")
+  expect_error(plot_glm_predictor(m, "ns(LEEFTIJD, 4)"), "LEEFTIJD")
+  # the underlying column still works
+  expect_s3_class(plot_glm_predictor(m, "LEEFTIJD"), "plotly")
+})
+
 test_that("plot_glm_predictor returns plotly objects", {
   expect_s3_class(plot_glm_predictor(m_freq, "LEEFTIJD", n_bins = 30),
                   "plotly")
