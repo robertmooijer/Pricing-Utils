@@ -247,7 +247,7 @@ averaged away.
 
 ### `make_plot()`
 
-One-way plot of frequency or severity with exposure bars on a secondary
+One-way plot of frequency or severity with volume bars on a secondary
 axis. Takes **raw policy rows** and aggregates internally via `agg_all()`.
 
 ```r
@@ -261,10 +261,15 @@ make_plot(data, col, metric = c("Frequency", "Severity"),
 
 - `metric` selects what is plotted: `"Frequency"` (claims / exposure) or
   `"Severity"` (loss / claim), both computed on the internal aggregate.
+- **The bars follow the metric's own denominator**: exposure under a
+  frequency, the claim count under a severity. Those two routinely run in
+  opposite directions — the level with the most exposure is often the one
+  with the fewest claims — so exposure bars under a severity line would
+  tell the reader the opposite of how solid each point is.
 - `display = "color"`: one coloured line per year in a single panel
-  (native plotly). Note: the exposure bars then show the **sum over all
-  years** — the trace is labelled "Exposure (all years)" accordingly.
-- `display = "facet"`: one panel per year (ggplot2 → ggplotly). Exposure bars
+  (native plotly). Note: the bars then show the **sum over all
+  years** — the trace is labelled "… (all years)" accordingly.
+- `display = "facet"`: one panel per year (ggplot2 → ggplotly). The bars
   are rescaled per facet to the metric range; the tooltip shows true values.
 - Categorical X-axes (and numeric columns with ≤ `discrete_cutoff` unique
   values) are drawn as markers only, so categories are never connected by a
@@ -1578,6 +1583,7 @@ factors of that term, not the model's predictions.
 ```r
 model_lift(model_freq = NULL, model_sev = NULL, data = NULL,
            actual_col = "SCHADELAST", exposure_col = "Exposure",
+           claims_col = "AantalClaims", weight_col = NULL,
            n_bins = 10, y_range = NULL)
 ```
 
@@ -1586,7 +1592,20 @@ model_lift(model_freq = NULL, model_sev = NULL, data = NULL,
 | `model_freq`, `model_sev` | glm or NULL | `NULL` | supply both for a risk premium, one for a frequency- or severity-only lift |
 | `data` | data.frame or NULL | `NULL` | evaluation data; `NULL` uses the model's own rows (in-sample, labelled on the plot) |
 | `actual_col` | character(1) | `"SCHADELAST"` | realised amount: loss for a premium model, claim count for a frequency model |
-| `n_bins` | integer | `10` | equal-exposure bins |
+| `exposure_col` | character(1) | `"Exposure"` | the column held at 1 to neutralise a model's offset |
+| `claims_col` | character(1) | `"AantalClaims"` | weight for a severity-only lift |
+| `weight_col` | character(1) or NULL | `NULL` | column to bin and weight on; `NULL` picks it from the models (see below) |
+| `n_bins` | integer | `10` | bins of equal weight |
+
+**The weight follows the model.** A severity model predicts a mean **per
+claim**, so weighting it by exposure multiplies a per-claim amount by a
+per-year one: the predicted total then misses the realised total by
+roughly the mean claim count, and the Gini orders by severity while
+weighting by exposure. `weight_col = NULL` therefore resolves to
+`claims_col` for a severity-only lift and to `exposure_col` for frequency
+and risk premium — the same rule `plot_glm_predictor()` and `make_pdp()`
+already apply to their volume bars. Set `weight_col` explicitly only to
+override it.
 
 **Algorithm.**
 
@@ -1594,17 +1613,20 @@ model_lift(model_freq = NULL, model_sev = NULL, data = NULL,
    neutralised, and multiply them.
 2. Drop rows with non-finite values or non-positive exposure, with a
    warning counting them.
-3. Order by predicted rate and assign bins by **cumulative exposure**, so
+3. Order by predicted rate and assign bins by **cumulative weight**, so
    each bin holds `1/n_bins` of the book.
 4. Per bin: `ActualRate = Σactual / Σw`, `PredictedRate = Σ(rate·w) / Σw`,
    `AE` their ratio.
-5. Gini from the exposure-weighted Lorenz curve: with `x` the cumulative
-   exposure share and `y` the cumulative loss share, both ordered by the
-   prediction, `Gini = 1 − 2·∫y dx` by the trapezoid rule.
+5. Gini from the weighted Lorenz curve: with `x` the cumulative weight
+   share and `y` the cumulative loss share, both ordered by the
+   prediction, `Gini = 1 − 2·∫y dx` by the trapezoid rule. `NA` when there
+   are no losses at all, since there is then no curve to measure.
 
 **Returns.** `table` (`Bin`, `Exposure`, `ExposureShare`, `ActualRate`,
 `PredictedRate`, `AE`), `gini`, `stats` (including `in_sample`), `plot`,
-`plot_lorenz`.
+`plot_lorenz`. `Exposure` and `ExposureShare` hold whatever `weight_col`
+resolved to, so on a severity-only lift they are claim counts; the axis
+titles name it.
 
 **Assumptions.** Log link, so `exp(offset)` is an exposure. The actual and
 the prediction must be in the same units — pass `actual_col` accordingly.

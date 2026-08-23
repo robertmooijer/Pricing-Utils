@@ -41,21 +41,45 @@
 #' @param actual_col Column with the realised amount to compare against:
 #'   the loss amount for a risk premium or severity model, the claim count
 #'   for a frequency model.
-#' @param exposure_col Exposure column (default `"Exposure"`).
-#' @param n_bins Number of equal-exposure bins (default 10).
+#' @param exposure_col Exposure column (default `"Exposure"`). This is
+#'   also the column held at 1 to neutralise a model's offset.
+#' @param claims_col Claim count column (default `"AantalClaims"`), used
+#'   as the weight for a severity-only lift.
+#' @param weight_col Column to bin and weight on. `NULL` (default) picks
+#'   it from the models: `claims_col` for a severity-only lift, otherwise
+#'   `exposure_col`. A severity model predicts a mean **per claim**, so
+#'   weighting it by exposure multiplies a per-claim amount by a per-year
+#'   one and the totals do not reconcile; frequency and risk premium are
+#'   rates per exposure unit and keep the exposure. Set this explicitly
+#'   only to override that choice.
+#' @param n_bins Number of equal-weight bins (default 10).
 #' @param y_range Optional `c(lo, hi)` to fix the rate axis.
 #'
 #' @return A list with `table` (one row per bin), `gini`, `stats`, `plot`
-#'   (the lift chart) and `plot_lorenz` (the curve behind the Gini).
+#'   (the lift chart) and `plot_lorenz` (the curve behind the Gini). The
+#'   `Exposure` and `ExposureShare` columns hold whatever `weight_col`
+#'   resolved to, so on a severity-only lift they are claim counts; the
+#'   axis titles name it.
 #' @seealso [double_lift()] to compare two candidate tariffs.
 #' @export
 model_lift <- function(model_freq = NULL, model_sev = NULL, data = NULL,
                        actual_col = "SCHADELAST",
                        exposure_col = "Exposure",
+                       claims_col = "AantalClaims",
+                       weight_col = NULL,
                        n_bins = 10, y_range = NULL) {
 
   if (is.null(model_freq) && is.null(model_sev))
     stop("model_lift: provide at least one model.", call. = FALSE)
+
+  # The weight has to be the denominator the prediction is a rate over. A
+  # severity model predicts a mean per claim, so weighting it by exposure
+  # multiplies a per-claim amount by a per-year one and the totals do not
+  # reconcile at all. Frequency and risk premium are rates per exposure
+  # unit, so those keep the exposure.
+  sev_only <- is.null(model_freq) && !is.null(model_sev)
+  if (is.null(weight_col)) weight_col <- if (sev_only) claims_col
+                                         else exposure_col
   y_range <- .check_range(y_range, "model_lift")
   if (n_bins < 2) stop("model_lift: 'n_bins' must be at least 2.",
                        call. = FALSE)
@@ -72,11 +96,11 @@ model_lift <- function(model_freq = NULL, model_sev = NULL, data = NULL,
   } else {
     data <- .as_df(data)
   }
-  .check_cols(data, c(actual_col, exposure_col), "model_lift")
+  .check_cols(data, c(actual_col, exposure_col, weight_col), "model_lift")
 
   rate <- .model_rate(model_freq, data, exposure_col, "model_lift") *
           .model_rate(model_sev,  data, exposure_col, "model_lift")
-  w    <- as.numeric(data[[exposure_col]])
+  w    <- as.numeric(data[[weight_col]])
   act  <- as.numeric(data[[actual_col]])
 
   keep <- is.finite(rate) & is.finite(w) & w > 0 & is.finite(act)
@@ -106,6 +130,10 @@ model_lift <- function(model_freq = NULL, model_sev = NULL, data = NULL,
 
   gini <- .gini_exposure(rate, act, w)
   lbl  <- if (in_sample) " (in-sample)" else " (out-of-sample)"
+  # Every axis names the weight actually in force, so a severity lift does
+  # not claim to be per unit of exposure
+  w_lab    <- if (identical(weight_col, exposure_col)) "exposure" else weight_col
+  rate_lab <- paste0("Rate per unit of ", w_lab)
 
   ht <- paste0("<b>Bin %{x}</b><br>%{data.name}: %{y:.2f}",
                "<extra></extra>")
@@ -121,13 +149,13 @@ model_lift <- function(model_freq = NULL, model_sev = NULL, data = NULL,
               marker = list(color = ta_blue, size = 8),
               hovertemplate = ht) %>%
     layout(
-      title = list(text = paste0("Lift \u2013 ", n_bins,
-                                 " equal-exposure bins", lbl,
+      title = list(text = paste0("Lift \u2013 ", n_bins, " bins of equal ",
+                                 w_lab, lbl,
                                  sprintf("  \u00b7  Gini %.3f", gini)),
                    font = list(color = ta_navy, size = 14)),
       xaxis = list(title = "Bin, ordered by predicted rate",
                    dtick = 1, showgrid = FALSE),
-      yaxis = list(title = "Rate per unit of exposure",
+      yaxis = list(title = rate_lab,
                    gridcolor = "#D0D8E0", zeroline = FALSE,
                    range = y_range, autorange = is.null(y_range)),
       legend = list(orientation = "h", y = -0.2),
@@ -150,13 +178,13 @@ model_lift <- function(model_freq = NULL, model_sev = NULL, data = NULL,
     add_trace(x = cx[step], y = cy[step], name = "Lorenz",
               type = "scatter", mode = "lines",
               line = list(color = ta_navy, width = 2),
-              hovertemplate = paste0("Exposure: %{x:.1%}",
+              hovertemplate = paste0(w_lab, ": %{x:.1%}",
                                      "<br>Losses: %{y:.1%}<extra></extra>")) %>%
     layout(
       title = list(text = sprintf("Lorenz curve%s  \u00b7  Gini %.3f",
                                   lbl, gini),
                    font = list(color = ta_navy, size = 14)),
-      xaxis = list(title = "Cumulative exposure", tickformat = ".0%",
+      xaxis = list(title = paste("Cumulative", w_lab), tickformat = ".0%",
                    showgrid = FALSE),
       yaxis = list(title = "Cumulative losses", tickformat = ".0%",
                    gridcolor = "#D0D8E0", zeroline = FALSE),

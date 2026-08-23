@@ -1,7 +1,14 @@
 #' One-way plot of frequency or severity with exposure bars
 #'
 #' Takes raw policy rows, aggregates them internally via [agg_all()] and
-#' plots the chosen metric with exposure bars on a secondary axis.
+#' plots the chosen metric with volume bars on a secondary axis.
+#'
+#' The bars show the denominator the metric is built on, so they say how
+#' solid each point is: exposure for a frequency, the claim count for a
+#' severity (which is a mean per claim). Those two can run in opposite
+#' directions - the level with the most exposure is often the one with the
+#' fewest claims - so exposure bars under a severity line would point the
+#' reader the wrong way.
 #'
 #' With a character/factor X-axis (or a numeric one with at most
 #' `discrete_cutoff` unique values) only markers are shown, so categories are
@@ -75,15 +82,24 @@ make_plot <- function(data, col, metric = c("Frequency", "Severity"),
   # Sort by X (and Year when split) so the line runs cleanly
   agg <- if (by_year) agg %>% arrange(Year, .x) else agg %>% arrange(.x)
 
-  # Exposure aggregate for the bars (sum over years when by_year)
+  # Volume bars: the denominator the metric is actually built on, so the
+  # bar says how solid each point is. A severity is a mean per claim, so
+  # its bar is the claim count; exposure would be the wrong denominator
+  # and can run the other way entirely (the level with the most exposure
+  # is often the one with the fewest claims).
+  vol_col  <- if (metric == "Severity") "ClaimCount" else "Exposure"
+  vol_base <- if (metric == "Severity") "Number of claims" else "Exposure"
+  vol_f    <- stats::as.formula(paste0("~`", vol_col, "`"))
+
   exp_agg <- if (by_year) {
     agg %>%
       group_by(.x) %>%
-      summarise(Exposure = sum(Exposure, na.rm = TRUE), .groups = "drop")
+      summarise(!!vol_col := sum(.data[[vol_col]], na.rm = TRUE),
+                .groups = "drop")
   } else {
     agg
   }
-  exp_name <- if (by_year) "Exposure (all years)" else "Exposure"
+  exp_name <- if (by_year) paste0(vol_base, " (all years)") else vol_base
 
   # Facet mode: ggplot2 + ggplotly -----------------------------------------
   if (by_year && display == "facet") {
@@ -94,13 +110,13 @@ make_plot <- function(data, col, metric = c("Frequency", "Severity"),
       group_by(Year) %>%
       mutate(
         .metric_max  = suppressWarnings(max(.data[[metric]], na.rm = TRUE)),
-        .exp_max     = suppressWarnings(max(Exposure,        na.rm = TRUE)),
+        .exp_max     = suppressWarnings(max(.data[[vol_col]], na.rm = TRUE)),
         .exp_scaled  = ifelse(is.finite(.exp_max) & .exp_max > 0 &
                               is.finite(.metric_max) & .metric_max > 0,
-                              Exposure / .exp_max * .metric_max,
+                              .data[[vol_col]] / .exp_max * .metric_max,
                               0),
-        .exp_label   = paste0("Exposure: ",
-                              format(round(Exposure), big.mark = ",",
+        .exp_label   = paste0(vol_base, ": ",
+                              format(round(.data[[vol_col]]), big.mark = ",",
                                      scientific = FALSE)),
         .metric_label = paste0(metric, ": ",
                                formatC(.data[[metric]], format = "f",
@@ -109,7 +125,7 @@ make_plot <- function(data, col, metric = c("Frequency", "Severity"),
       ungroup()
 
     p <- ggplot(agg_facet, aes(x = .x)) +
-      geom_col(aes(y = .exp_scaled, fill = "Exposure", text = .exp_label),
+      geom_col(aes(y = .exp_scaled, fill = vol_base, text = .exp_label),
                width = 0.6, alpha = 0.38)
     if (!is_discrete) {
       p <- p + geom_line(aes(y = .data[[metric]], color = metric, group = 1),
@@ -118,7 +134,8 @@ make_plot <- function(data, col, metric = c("Frequency", "Severity"),
     p <- p +
       geom_point(aes(y = .data[[metric]], color = metric,
                      text = .metric_label), size = 2) +
-      scale_fill_manual(name = NULL, values = c("Exposure" = ta_lightblue)) +
+      scale_fill_manual(name = NULL,
+                        values = setNames(ta_lightblue, vol_base)) +
       scale_color_manual(name = NULL,
                          values = setNames(color_single, metric)) +
       scale_y_continuous(name = y_label) +
@@ -128,7 +145,8 @@ make_plot <- function(data, col, metric = c("Frequency", "Severity"),
          ggplot2::coord_cartesian(ylim = y_range)) +
       facet_wrap(vars(Year), scales = if (is.null(y_range)) "free_y" else "fixed") +
       labs(x = col, title = paste(metric, "-", col),
-           caption = "Exposure bars are rescaled per facet; the tooltip shows the actual value.") +
+           caption = paste0(vol_base, " bars are rescaled per facet; the ",
+                            "tooltip shows the actual value.")) +
       theme_minimal() +
       theme(
         axis.text.x      = element_text(angle = 45, hjust = 1, size = 8),
@@ -153,7 +171,7 @@ make_plot <- function(data, col, metric = c("Frequency", "Severity"),
     add_bars(
       data             = exp_agg,
       x                = ~.x,
-      y                = ~Exposure,
+      y                = vol_f,
       name             = exp_name,
       yaxis            = "y2",
       marker           = list(color = ta_lightblue, opacity = 0.5,
@@ -217,7 +235,7 @@ make_plot <- function(data, col, metric = c("Frequency", "Severity"),
                     zeroline   = FALSE,
                     range      = y_range,
                     autorange  = is.null(y_range)),
-      yaxis2 = list(title      = "Exposure",
+      yaxis2 = list(title      = vol_base,
                     overlaying = "y",
                     side       = "right",
                     showgrid   = FALSE,

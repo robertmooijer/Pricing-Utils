@@ -55,9 +55,16 @@ A plotly object.
 }
 \description{
 Takes raw policy rows, aggregates them internally via \code{\link[=agg_all]{agg_all()}} and
-plots the chosen metric with exposure bars on a secondary axis.
+plots the chosen metric with volume bars on a secondary axis.
 }
 \details{
+The bars show the denominator the metric is built on, so they say how
+solid each point is: exposure for a frequency, the claim count for a
+severity (which is a mean per claim). Those two can run in opposite
+directions - the level with the most exposure is often the one with the
+fewest claims - so exposure bars under a severity line would point the
+reader the wrong way.
+
 With a character/factor X-axis (or a numeric one with at most
 \code{discrete_cutoff} unique values) only markers are shown, so categories are
 never connected by a line. Note: in color mode with \code{by_year = TRUE} the

@@ -8,6 +8,37 @@ test_that("agg_all works with custom column names and validates input", {
                "DOES_NOT_EXIST")
 })
 
+test_that("the volume bars follow the metric's own denominator", {
+  # a severity is a mean per claim, so exposure bars would say how much
+  # business is in a level, not how many claims the mean rests on - and
+  # those routinely run in opposite directions
+  bar <- function(p) {
+    b <- plotly::plotly_build(p)
+    list(name = b$x$data[[1]]$name, y = as.vector(b$x$data[[1]]$y))
+  }
+  pf <- make_plot(dat, "REGIO", "Frequency", ta_blue, "F",
+                  display = "color", by_year = FALSE)
+  ps <- make_plot(dat, "REGIO", "Severity", ta_blue, "S",
+                  display = "color", by_year = FALSE)
+
+  expect_identical(bar(pf)$name, "Exposure")
+  expect_identical(bar(ps)$name, "Number of claims")
+  expect_equal(sort(bar(pf)$y), sort(as.vector(tapply(dat$Exposure,
+                                                      dat$REGIO, sum))),
+               tolerance = 1e-8)
+  expect_equal(sort(bar(ps)$y), sort(as.vector(tapply(dat$AantalClaims,
+                                                      dat$REGIO, sum))),
+               tolerance = 1e-8)
+  # the secondary axis is labelled accordingly
+  expect_identical(plotly::plotly_build(ps)$x$layout$yaxis2$title,
+                   "Number of claims")
+
+  # facet mode uses the same column
+  pff <- make_plot(dat, "REGIO", "Severity", ta_blue, "S",
+                   display = "facet", by_year = TRUE)
+  expect_s3_class(pff, "plotly")
+})
+
 test_that("grouping on a column agg_all creates is refused", {
   # grouping on "Exposure" produced a data.frame with two columns of that
   # name rather than an error, and every later lookup then picked one of

@@ -85,6 +85,53 @@ test_that("the rate level change is reported whether or not we rebase", {
   expect_equal(f(FALSE), 0.25, tolerance = 1e-8)
 })
 
+test_that("a severity-only lift weights by claims, not exposure", {
+  # a severity model predicts a mean per claim, so exposure is the wrong
+  # denominator: predicted x exposure does not reconcile with total loss
+  set.seed(41)
+  nn <- 5000
+  dd <- data.frame(
+    REGIO = factor(sample(c("N", "O", "Z"), nn, TRUE, c(.5, .3, .2))),
+    LEEFTIJD = round(runif(nn, 18, 75)),
+    Exposure = round(runif(nn, .3, 1), 3))
+  # claims per policy vary strongly by region, so the two weights differ
+  dd$AantalClaims <- rpois(nn, c(N = .4, O = 1.2,
+                                 Z = 3.0)[as.character(dd$REGIO)])
+  mu <- exp(7 + .012 * dd$LEEFTIJD + .35 * (dd$REGIO == "Z"))
+  dd$SCHADELAST <- vapply(seq_len(nn), function(i)
+    if (dd$AantalClaims[i] == 0) 0 else
+      sum(rgamma(dd$AantalClaims[i], 3, scale = mu[i] / 3)), numeric(1))
+  dsv <- dd[dd$AantalClaims > 0, ]
+  dsv$AvgLoss <- dsv$SCHADELAST / dsv$AantalClaims
+  ms <- glm(AvgLoss ~ REGIO + LEEFTIJD, Gamma("log"), dsv,
+            weights = AantalClaims)
+
+  l <- model_lift(NULL, ms, dsv, actual_col = "SCHADELAST")
+  # predicted total now reconciles with the realised total
+  expect_equal(l$stats$total_predicted, l$stats$total_actual,
+               tolerance = 0.02)
+  # the bins hold equal claim counts, not equal exposure
+  expect_equal(sum(l$table$Exposure), sum(dsv$AantalClaims),
+               tolerance = 1e-8)
+  # and the unit-mismatch warning is gone: weighting by exposure used to
+  # put the predicted total a factor of three below the realised one
+  expect_no_warning(model_lift(NULL, ms, dsv, actual_col = "SCHADELAST"))
+  expect_warning(model_lift(NULL, ms, dsv, actual_col = "SCHADELAST",
+                            weight_col = "Exposure"),
+                 "not the same quantity")
+
+  # a frequency lift is untouched: still weighted by exposure
+  mf <- glm(AantalClaims ~ REGIO + LEEFTIJD + offset(log(Exposure)),
+            poisson(), dsv)
+  lf <- model_lift(mf, NULL, dsv, actual_col = "AantalClaims")
+  expect_equal(sum(lf$table$Exposure), sum(dsv$Exposure), tolerance = 1e-8)
+
+  # and an explicit weight_col overrides the automatic choice
+  lw <- suppressWarnings(model_lift(NULL, ms, dsv, actual_col = "SCHADELAST",
+                                    weight_col = "Exposure"))
+  expect_equal(sum(lw$table$Exposure), sum(dsv$Exposure), tolerance = 1e-8)
+})
+
 test_that("a portfolio without losses gives NA rather than NaN for the Gini", {
   d0 <- dl
   d0$AantalClaims <- 0

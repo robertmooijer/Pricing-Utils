@@ -10,6 +10,8 @@ model_lift(
   data = NULL,
   actual_col = "SCHADELAST",
   exposure_col = "Exposure",
+  claims_col = "AantalClaims",
+  weight_col = NULL,
   n_bins = 10,
   y_range = NULL
 )
@@ -27,15 +29,30 @@ holdout for an honest out-of-sample lift.}
 the loss amount for a risk premium or severity model, the claim count
 for a frequency model.}
 
-\item{exposure_col}{Exposure column (default \code{"Exposure"}).}
+\item{exposure_col}{Exposure column (default \code{"Exposure"}). This is
+also the column held at 1 to neutralise a model's offset.}
 
-\item{n_bins}{Number of equal-exposure bins (default 10).}
+\item{claims_col}{Claim count column (default \code{"AantalClaims"}), used
+as the weight for a severity-only lift.}
+
+\item{weight_col}{Column to bin and weight on. \code{NULL} (default) picks
+it from the models: \code{claims_col} for a severity-only lift, otherwise
+\code{exposure_col}. A severity model predicts a mean \strong{per claim}, so
+weighting it by exposure multiplies a per-claim amount by a per-year
+one and the totals do not reconcile; frequency and risk premium are
+rates per exposure unit and keep the exposure. Set this explicitly
+only to override that choice.}
+
+\item{n_bins}{Number of equal-weight bins (default 10).}
 
 \item{y_range}{Optional \code{c(lo, hi)} to fix the rate axis.}
 }
 \value{
 A list with \code{table} (one row per bin), \code{gini}, \code{stats}, \code{plot}
-(the lift chart) and \code{plot_lorenz} (the curve behind the Gini).
+(the lift chart) and \code{plot_lorenz} (the curve behind the Gini). The
+\code{Exposure} and \code{ExposureShare} columns hold whatever \code{weight_col}
+resolved to, so on a severity-only lift they are claim counts; the
+axis titles name it.
 }
 \description{
 Sorts the portfolio by predicted risk premium, splits it into bins of
