@@ -641,6 +641,18 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
 | `Uplift_Frequency`, `Uplift_Severity`, `Uplift_Premium` | interaction rows only: pure interaction effect = joint / (main<sub>x</sub> × main<sub>group</sub>); equals 1 everywhere when there is no interaction |
 | `IsThin` | `TRUE` when `ClaimCount < min_claims`; these levels are dimmed in `make_rating_plot()` and greyed out in the Excel export — see [Thin cells](#thin-cells) |
 
+**Offsets and the base point.** Every variable the model offsets on is held
+at 1 in the base row, so `intercept × factors` is a rate per unit of
+exposure whatever that column is called. If the offset variable differs
+from `exposure_col`, the intercepts are still correct but the `Exposure`
+and `ClaimCount` columns are summed from a different column, and the
+function warns.
+
+**Rows outside the grid.** With `trim`, policies beyond the trimmed range
+are excluded from the exposure histogram rather than swept into the outer
+bins. The exposure shown therefore adds up to less than the portfolio
+total — by design, since the grid does not cover those policies.
+
 Attributes on the returned table:
 
 - `intercept_frequency`, `intercept_severity`, `intercept_premium` — the
@@ -1175,13 +1187,16 @@ Deliberately out of scope (for now):
 
 - **No uncertainty quantification** — the rating factors carry no standard
   errors or confidence intervals.
-- **No holdout / train-test support** — all comparisons are in-sample on the
-  training data.
-- **No portfolio-level model comparison** — lift charts, Lorenz/Gini and
-  double-lift are not included (fit statistics and residual diagnostics are:
-  see `glm_diagnostics()` and `plot_glm_residuals()`).
+- **In-sample by default** — every diagnostic evaluates on the model's own
+  rows unless told otherwise. Two functions do more:
+  [`model_lift()`](#model_lift) and [`double_lift()`](#double_lift) take a
+  holdout through `data`, and [`screen_features()`](#screen_features)
+  splits internally because a booster is meaningless without one. There is
+  no cross-validation and no automated backtesting.
 - **Frequency × severity only** — direct risk-premium (e.g. Tweedie) models
   do not fit the rating-table structure.
+- **No rate-making beyond the risk premium** — no on-levelling, trend
+  adjustment or loading for expenses, commission and profit.
 - **Two-way interactions only** — higher-order interaction terms are skipped
   (with a warning).
 - `make_pdp()` and `plot_glm_predictor()` support `glm` objects only.

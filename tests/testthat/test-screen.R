@@ -20,7 +20,7 @@ m_scr <- glm(AantalClaims ~ LEEFTIJD + REGIO + offset(log(Exposure)),
              family = poisson(), data = dscr)
 
 res <- suppressWarnings(
-  screen_features(m_scr, seed = 4, nrounds = 300,
+  screen_features(m_scr, seed = 4, nrounds = 300, nthread = 2,
                   early_stopping_rounds = 20, n_shap = 0))
 
 test_that("screen_features returns the documented structure", {
@@ -78,7 +78,7 @@ test_that("awkward columns are dropped instead of crashing", {
             family = poisson(), data = d2)
 
   expect_warning(
-    r2 <- screen_features(m2, seed = 2, nrounds = 100,
+    r2 <- screen_features(m2, seed = 2, nrounds = 100, nthread = 2,
                           early_stopping_rounds = 15, n_shap = 0),
     "constant")
   expect_s3_class(r2$features, "data.frame")

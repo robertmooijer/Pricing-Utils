@@ -108,9 +108,11 @@
 #'   (baseline refit, boosting, permutation) scales with the row count. The
 #'   reported deviances then refer to the sample.
 #' @param nthread Threads for boosting. `NULL` (default) uses one fewer
-#'   than the available cores. Boosting dominates the runtime, so this is
-#'   the second lever: on an eight-core machine the measured gain over a
-#'   single-threaded run is more than a factor of two.
+#'   than the available cores, capped by `OMP_THREAD_LIMIT` and reduced to
+#'   2 under `R CMD check`, which limits what a package may claim. Boosting
+#'   dominates the runtime, so this is the second lever: on an eight-core
+#'   machine the measured gain over a single-threaded run is more than a
+#'   factor of two.
 #' @param seed Optional seed for the sample, the split and the boosting.
 #'
 #' @return A list with `summary` (the staged deviance comparison),
@@ -137,8 +139,7 @@ screen_features <- function(model, features = NULL,
     stop("screen_features: 'split' must be three positive shares summing to 1.",
          call. = FALSE)
   if (!is.null(seed)) set.seed(seed)
-  if (is.null(nthread))
-    nthread <- max(1L, parallel::detectCores() - 1L)
+  if (is.null(nthread)) nthread <- .default_nthread()
 
   tr <- .glm_training_data(model, "screen_features")
   if (is.null(tr$data))
@@ -279,12 +280,18 @@ screen_features <- function(model, features = NULL,
   dm_va <- mk(d_va, y_va, w_va, margin_va)
   dm_te <- mk_from(layout_te$x, y_te, w_te, margin_te)
 
+  # xgboost renamed `watchlist` to `evals` in its 2.x series, so pick the
+  # name this installation actually has rather than pinning a version
+  eval_arg <- if ("evals" %in% names(formals(xgboost::xgb.train)))
+    "evals" else "watchlist"
   fit_depth <- function(depth) {
-    xgboost::xgb.train(
-      list(objective = objective, max_depth = depth, eta = eta,
-           subsample = 0.8, colsample_bytree = 0.8, nthread = nthread),
-      dm_tr, nrounds = nrounds, watchlist = list(valid = dm_va),
-      early_stopping_rounds = early_stopping_rounds, verbose = 0)
+    args <- list(list(objective = objective, max_depth = depth, eta = eta,
+                      subsample = 0.8, colsample_bytree = 0.8,
+                      nthread = nthread),
+                 dm_tr, nrounds = nrounds,
+                 early_stopping_rounds = early_stopping_rounds, verbose = 0)
+    args[[eval_arg]] <- list(valid = dm_va)
+    do.call(xgboost::xgb.train, args)
   }
   b1 <- fit_depth(1)
   b2 <- if (max_depth > 1) fit_depth(max_depth) else b1

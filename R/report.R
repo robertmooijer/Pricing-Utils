@@ -198,8 +198,10 @@ pricing_report <- function(model_freq = NULL, model_sev = NULL, data,
     htmltools::tagList(parts)
   })
 
+  # The rating-table interaction plots belong to the interaction block, so
+  # leaving "interactions" out of `include` removes them along with the scan
   int_sec <- NULL
-  if (!is.null(tbl)) {
+  if (!is.null(tbl) && "interactions" %in% include) {
     ivars <- unique(tbl$Variable[!is.na(tbl$Group)])
     if (length(ivars))
       int_sec <- htmltools::tagList(

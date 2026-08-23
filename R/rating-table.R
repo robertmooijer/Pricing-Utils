@@ -80,6 +80,18 @@ make_rating_table <- function(model_freq = NULL,
   check_link(model_freq, "frequency")
   check_link(model_sev,  "severity")
 
+  # Every offset variable is held at 1 in the base row, so the intercept is
+  # per unit of whatever the model actually offsets on. If that is not
+  # `exposure_col`, the Exposure column of the table measures something
+  # else than the model does, which is worth saying out loud.
+  offset_vars <- unique(c(.offset_vars(model_freq), .offset_vars(model_sev)))
+  if (length(offset_vars) && !exposure_col %in% offset_vars)
+    warning("make_rating_table: the model offsets on '",
+            paste(offset_vars, collapse = ", "), "' while exposure_col = '",
+            exposure_col, "'. The intercepts are per unit of the offset ",
+            "variable, but the Exposure and volume columns are summed from '",
+            exposure_col, "'.", call. = FALSE)
+
   # Helpers -------------------------------------------------------------------
   # Underlying column of a term label (shared helper, bound to `data`)
   base_var <- function(term) .term_base_var(term, data)
@@ -105,7 +117,10 @@ make_rating_table <- function(model_freq = NULL,
   # Base value per variable (raw value, not yet coerced):
   #   categorical -> reference level; continuous -> median; exposure -> 1
   base_value_raw <- function(bv) {
-    if (bv == exposure_col) return(1)
+    # Any offset variable sits at 1, not just the one named by
+    # exposure_col, so the intercept is a rate per unit of exposure
+    # whatever that column happens to be called
+    if (bv == exposure_col || bv %in% offset_vars) return(1)
     if (var_is_cat(bv)) {
       lv <- var_levels(bv)
       if (base_level == "exposure") {
@@ -134,7 +149,9 @@ make_rating_table <- function(model_freq = NULL,
            paste(missing_vars, collapse = ", "))
     row <- lapply(vars, function(nm) .coerce_like(base_value_raw(nm), data[[nm]]))
     names(row) <- vars
-    as.data.frame(row, stringsAsFactors = FALSE)
+    # check.names = FALSE, or a column such as "AUTO GEWICHT" is silently
+    # renamed to "AUTO.GEWICHT" here and every predict() on this row fails
+    as.data.frame(row, stringsAsFactors = FALSE, check.names = FALSE)
   }
 
   # Factors for one variable: prediction on grid / prediction on base row.
@@ -235,9 +252,18 @@ make_rating_table <- function(model_freq = NULL,
       exposure[is.na(exposure)]       <- 0
       claim_count[is.na(claim_count)] <- 0
     } else {
-      # Continuous variables: exposure histogram via binning on the grid
+      # Continuous variables: exposure histogram via binning on the grid.
+      # Values outside a trimmed range are excluded rather than swept into
+      # the edge bins, which would make the outer bars overstate their
+      # volume: the grid does not cover those policies, so neither should
+      # the bars. The trimmed exposure is therefore below the portfolio
+      # total by design.
       brks <- c(-Inf, grid_vals[-1] - diff(grid_vals)/2, Inf)
       bin  <- findInterval(data[[bv]], brks)
+      if (!isTRUE(all.equal(trim, c(0, 1)))) {
+        outside <- data[[bv]] < min(grid_vals) | data[[bv]] > max(grid_vals)
+        bin[outside %in% TRUE] <- NA_integer_
+      }
       ag   <- data.table::data.table(
         bin        = bin,
         Exposure   = data[[exposure_col]],

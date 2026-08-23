@@ -30,16 +30,18 @@ export_rating_table <- function(rating_tbl, file = "rating_table.xlsx",
                                      textDecoration = "bold")
   st_thin   <- openxlsx::createStyle(fontColour = "#999999",
                                      textDecoration = "italic")
-  st_fac    <- openxlsx::createStyle(numFmt = paste0("0.",
-                                                     strrep("0", digits)))
+  st_fac    <- openxlsx::createStyle(
+    numFmt = if (digits > 0) paste0("0.", strrep("0", digits)) else "0")
   st_int    <- openxlsx::createStyle(numFmt = "#,##0")
 
   wb         <- openxlsx::createWorkbook()
   used_names <- character(0)
+  # Excel treats sheet names case-insensitively, so REGIO and Regio would
+  # otherwise both be accepted here and produce a corrupt workbook
   sheet_name <- function(nm) {
     nm   <- substr(gsub("[^A-Za-z0-9 _.-]", "_", nm), 1, 31)
     base <- nm; i <- 1
-    while (nm %in% used_names) {
+    while (tolower(nm) %in% tolower(used_names)) {
       nm <- paste0(substr(base, 1, 28), "_", i); i <- i + 1
     }
     used_names <<- c(used_names, nm)

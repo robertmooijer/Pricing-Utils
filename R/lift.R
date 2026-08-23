@@ -261,7 +261,8 @@ double_lift <- function(data,
   # model is across the range where the two disagree
   mad_new <- mean(abs(tbl$AE_New - 1), na.rm = TRUE)
   mad_old <- mean(abs(tbl$AE_Old - 1), na.rm = TRUE)
-  winner  <- if (mad_new < mad_old) "new" else "old"
+  winner  <- if (isTRUE(all.equal(mad_new, mad_old))) "tie"
+             else if (mad_new < mad_old) "new" else "old"
 
   ht <- function(nm) paste0("<b>Bin %{x}</b><br>", nm, ": %{y:.3f}",
                             "<br>Rate ratio: %{text:.3f}<extra></extra>")

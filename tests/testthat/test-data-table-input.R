@@ -22,10 +22,11 @@ m_dt <- glm(AantalClaims ~ LEEFTIJD + REGIO + offset(log(Exposure)),
 
 test_that("model$data as a data.table is handled", {
   expect_true(data.table::is.data.table(m_dt$data))
+  skip_if_not_installed("xgboost")
 
   # the exact call that failed: the correlation check indexes columns
   r <- suppressWarnings(
-    screen_features(m_dt, seed = 5, nrounds = 100,
+    screen_features(m_dt, seed = 5, nrounds = 100, nthread = 2,
                     early_stopping_rounds = 15, n_shap = 0))
   expect_s3_class(r$features, "data.frame")
   expect_true("KM" %in% r$features$Feature)
@@ -56,6 +57,8 @@ test_that("make_rating_table accepts data.table input", {
 })
 
 test_that("a rating table converted by the user still exports and plots", {
+  skip_if_not_installed("openxlsx")
+  skip_if_not_installed("tibble")
   # export_rating_table() selects columns by name, which is the same trap
   tb <- make_rating_table(m_dt, NULL, data = ddt)
   for (conv in list(data.table::as.data.table, tibble::as_tibble)) {

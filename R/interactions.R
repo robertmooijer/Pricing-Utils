@@ -224,13 +224,17 @@ detect_interactions <- function(model, vars = NULL, n_bins = 10,
     2 * sum(ifelse(A[ok] > 0, A[ok] * log(A[ok] / E[ok]), 0) - (A[ok] - E[ok]))
   }
 
-  fam   <- family(model)$family
-  boot  <- isTRUE(parts$counts) &&
-           fam %in% c("poisson", "quasipoisson")
-  phi   <- sum(residuals(model, type = "pearson")^2) / model$df.residual
+  # The resampling null needs the aggregated actuals to be Poisson counts.
+  # That depends on the family and the response, not on whether the model
+  # carries an exposure offset.
+  fam  <- family(model)$family
+  boot <- isTRUE(parts$poisson_counts)
+  phi  <- sum(residuals(model, type = "pearson")^2) / model$df.residual
   if (!boot)
-    message("detect_interactions: not a Poisson count model; using the ",
-            "dispersion-scaled chi-square instead of simulation.")
+    message("detect_interactions: the response is not Poisson counts (",
+            fam, "), so the reference distribution comes from the ",
+            "dispersion-scaled chi-square rather than simulation; it is ",
+            "less reliable in sparse tables.")
 
   pairs <- utils::combn(vars, 2, simplify = FALSE)
   rows  <- lapply(pairs, function(pr) tryCatch({

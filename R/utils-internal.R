@@ -80,7 +80,7 @@
   mu <- as.numeric(predict(model, type = "response"))
   has_offset <- !is.null(tr$offset) && any(tr$offset != 0)
 
-  if (has_offset && identical(family(model)$link, "log")) {
+  out <- if (has_offset && identical(family(model)$link, "log")) {
     c(tr, list(actual = y, expected = mu, exposure = exp(tr$offset),
                claims = y, exposure_label = "Exposure", counts = TRUE))
   } else {
@@ -88,6 +88,14 @@
     c(tr, list(actual = w * y, expected = w * mu, exposure = w,
                claims = w, exposure_label = "Weight", counts = FALSE))
   }
+  # Whether a Poisson resampling null is valid depends on the response
+  # being counts, not on an offset being present: a Poisson model fitted
+  # on aggregated cells without an offset qualifies just as well.
+  out$poisson_counts <-
+    family(model)$family %in% c("poisson", "quasipoisson") &&
+    all(is.finite(out$actual)) &&
+    all(abs(out$actual - round(out$actual)) < 1e-8)
+  out
 }
 
 # Values of one variable, aligned with the model's fitted rows
@@ -115,11 +123,27 @@
 # Variables appearing in the model's offset term, e.g. "Exposure" in
 # offset(log(Exposure)); never candidates for an interaction scan.
 .offset_vars <- function(model) {
+  if (is.null(model)) return(character(0))
   tt  <- terms(model)
   idx <- attr(tt, "offset")
   if (is.null(idx) || !length(idx)) return(character(0))
   vars <- attr(tt, "variables")
   unique(unlist(lapply(idx, function(i) all.vars(vars[[i + 1L]]))))
+}
+
+# Threads to hand to the booster. R CMD check and CRAN cap what a package
+# may claim, and grabbing every core inside a check can exhaust the
+# process's thread budget outright, so honour those limits rather than
+# assume the machine is ours alone.
+.default_nthread <- function() {
+  lim <- Sys.getenv("_R_CHECK_LIMIT_CORES_", "")
+  if (nzchar(lim) && !identical(tolower(lim), "false")) return(2L)
+  n <- suppressWarnings(parallel::detectCores())
+  if (!isTRUE(is.finite(n)) || n < 1L) n <- 1L
+  n <- max(1L, n - 1L)
+  omp <- suppressWarnings(as.integer(Sys.getenv("OMP_THREAD_LIMIT", "")))
+  if (isTRUE(is.finite(omp)) && omp >= 1L) n <- min(n, omp)
+  as.integer(n)
 }
 
 # Predicted rate per unit of exposure. The offset is neutralised by setting
@@ -210,12 +234,20 @@
   1 - 2 * auc
 }
 
-# Underlying column of a term label: "ns(AGE, 4)" -> "AGE"
+# Underlying column of a term label: "ns(AGE, 4)" -> "AGE".
+# Backticks are stripped first, so a non-syntactic name such as
+# `AUTO GEWICHT` still matches its column. Parsing the term and taking the
+# first variable that is a column handles I(KM^2) and log(KM) too, where
+# the old bracket-matching returned "KM^2" and lost the variable.
 .term_base_var <- function(term, data) {
+  term <- gsub("`", "", term, fixed = TRUE)
   if (term %in% names(data)) return(term)
+  v <- tryCatch(all.vars(str2lang(term)), error = function(e) character(0))
+  hit <- v[v %in% names(data)]
+  if (length(hit)) return(hit[1])
   m <- regmatches(term, regexpr("\\(([^,\\)]+)", term))
   if (length(m) == 0) return(term)
-  gsub("[()]", "", m)
+  gsub("[()`]", "", m)
 }
 
 # Base variables of a model that exist as columns in `data`
