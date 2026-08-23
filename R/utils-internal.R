@@ -234,6 +234,43 @@
   1 - 2 * auc
 }
 
+# A readable step for a continuous rating grid. Aims at roughly `n` points
+# across the range and then rounds to a 1 / 2 / 5 x 10^k value, the same
+# rule an axis uses for its ticks, so a tariff lists ages 18, 19, 20 and
+# weights 800, 850, 900 rather than 19.2653 and 832.65. Integer-valued
+# columns never get a fractional step.
+.nice_step <- function(rng, n, integer_data, n_distinct = Inf) {
+  span <- diff(rng)
+  if (!is.finite(span) || span <= 0) return(NA_real_)
+  # A whole-number column with few enough values is listed value by value:
+  # a tariff wants every age, not every second age
+  if (integer_data && n_distinct <= 2 * max(1, n)) return(1)
+  raw  <- span / max(1, n)
+  mag  <- 10^floor(log10(raw))
+  step <- mag * c(1, 2, 5, 10)[which(c(1, 2, 5, 10) >= raw / mag)[1]]
+  if (integer_data) step <- max(1, round(step))
+  step
+}
+
+# Grid over [lo, hi] in whole multiples of `step`, so the values read as
+# round numbers rather than as an offset sequence. `base` is added if the
+# clamping left it off the grid: it is the point the factors are divided
+# by, so a grid that skips it would have no row with a factor of 1.
+.step_grid <- function(lo, hi, step, base) {
+  if (!is.finite(step) || step <= 0) return(sort(unique(c(lo, hi, base))))
+  k_lo <- ceiling((lo - 1e-9) / step)
+  k_hi <- floor((hi + 1e-9) / step)
+  g    <- if (k_hi >= k_lo) seq(k_lo, k_hi) * step else numeric(0)
+  sort(unique(c(g, base)))
+}
+
+# Snap a value onto the same multiples-of-step grid, clamped to the range
+.snap_to_step <- function(x, step, lo, hi) {
+  if (!is.finite(step) || step <= 0) return(x)
+  s <- round(x / step) * step
+  min(max(s, lo), hi)
+}
+
 # Underlying column of a term label: "ns(AGE, 4)" -> "AGE".
 # Backticks are stripped first, so a non-syntactic name such as
 # `AUTO GEWICHT` still matches its column. Parsing the term and taking the

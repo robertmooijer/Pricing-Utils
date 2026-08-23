@@ -1,3 +1,21 @@
+# The rating table keeps Level as character, because a categorical level
+# is text. For a continuous variable that same column holds stringified
+# numbers, and Excel then flags every cell as "number stored as text". Put
+# the numeric LevelNum in its place there, and do the same for a Group
+# column whose values are all numeric (a continuous interaction partner).
+.numeric_levels <- function(d, tbl, rows) {
+  if ("Level" %in% names(d) && "LevelNum" %in% names(tbl) &&
+      identical(unique(tbl$Type[rows]), "continuous")) {
+    num <- tbl$LevelNum[rows]
+    if (!anyNA(num)) d$Level <- num
+  }
+  if ("Group" %in% names(d)) {
+    g <- suppressWarnings(as.numeric(d$Group))
+    if (length(g) && !anyNA(g)) d$Group <- g
+  }
+  d
+}
+
 #' Export a rating table to a formatted Excel workbook
 #'
 #' Writes the [make_rating_table()] output to a formatted `.xlsx` file:
@@ -50,6 +68,21 @@ export_rating_table <- function(rating_tbl, file = "rating_table.xlsx",
   fmt_att <- function(a) if (is.null(a) || is.na(a)) "-" else
     format(a, digits = 6, scientific = FALSE)
 
+  # Column widths from the actual content, with a floor. openxlsx's "auto"
+  # leaves logical columns too narrow, and Excel renders a clipped boolean
+  # as ##### just like a number.
+  col_widths <- function(d) {
+    vapply(seq_along(d), function(j) {
+      v <- d[[j]]
+      w <- if (is.numeric(v))
+        suppressWarnings(max(nchar(format(round(v, digits), trim = TRUE,
+                                          scientific = FALSE)), 1))
+      else suppressWarnings(max(nchar(as.character(v)), 1, na.rm = TRUE))
+      if (!is.finite(w)) w <- 1
+      max(nchar(names(d)[j]), w, 8) + 2
+    }, numeric(1))
+  }
+
   write_sheet <- function(nm, d) {
     sn <- sheet_name(nm)
     openxlsx::addWorksheet(wb, sn)
@@ -73,7 +106,7 @@ export_rating_table <- function(rating_tbl, file = "rating_table.xlsx",
     if (length(int_cols))
       openxlsx::addStyle(wb, sn, st_int, rows = seq_len(nrow(d)) + 1,
                          cols = int_cols, gridExpand = TRUE, stack = TRUE)
-    openxlsx::setColWidths(wb, sn, cols = seq_len(nc), widths = "auto")
+    openxlsx::setColWidths(wb, sn, cols = seq_len(nc), widths = col_widths(d))
     openxlsx::freezePane(wb, sn, firstRow = TRUE)
     sn
   }
@@ -102,14 +135,54 @@ export_rating_table <- function(rating_tbl, file = "rating_table.xlsx",
   openxlsx::writeData(wb, sn, ov, headerStyle = st_header)
   openxlsx::setColWidths(wb, sn, cols = 1:2, widths = "auto")
 
+  # Tariff sheet: every factor of every variable under one another, with a
+  # single lookup key, so a premium can be assembled with VLOOKUP instead
+  # of hopping between sheets ------------------------------------------------
+  tf_cols <- intersect(c("Factor_Frequency", "Factor_Severity",
+                         "Factor_Premium"), names(rating_tbl))
+  tf <- data.frame(
+    Key      = ifelse(is.na(rating_tbl$Group),
+                      paste(rating_tbl$Variable, rating_tbl$Level, sep = "|"),
+                      paste(rating_tbl$Variable, rating_tbl$Level,
+                            rating_tbl$Group, sep = "|")),
+    Variable = rating_tbl$Variable,
+    Level    = rating_tbl$Level,
+    Group    = rating_tbl$Group,
+    IsBase   = rating_tbl$IsBase,
+    stringsAsFactors = FALSE)
+  tf <- cbind(tf, rating_tbl[, tf_cols, drop = FALSE])
+  sn <- sheet_name("Tariff")
+  openxlsx::addWorksheet(wb, sn)
+  openxlsx::writeData(
+    wb, sn,
+    paste0("Premium = intercept x the factors of each variable. ",
+           "Look up a factor with VLOOKUP on the Key column, ",
+           "e.g. =VLOOKUP(\"", rating_tbl$Variable[1], "|\"&<cell>, ",
+           "Tariff!A:H, ", 5 + length(tf_cols), ", FALSE). ",
+           "Intercepts are on the Overview sheet."))
+  openxlsx::writeData(wb, sn, tf, startRow = 2, headerStyle = st_header)
+  tf_base <- which(tf$IsBase %in% TRUE) + 2
+  if (length(tf_base))
+    openxlsx::addStyle(wb, sn, st_base, rows = tf_base,
+                       cols = seq_len(ncol(tf)), gridExpand = TRUE,
+                       stack = TRUE)
+  fc <- which(names(tf) %in% tf_cols)
+  if (length(fc))
+    openxlsx::addStyle(wb, sn, st_fac, rows = seq_len(nrow(tf)) + 2,
+                       cols = fc, gridExpand = TRUE, stack = TRUE)
+  openxlsx::setColWidths(wb, sn, cols = seq_len(ncol(tf)),
+                         widths = col_widths(tf))
+  openxlsx::freezePane(wb, sn, firstActiveRow = 3)
+
   # Main-effect sheets ----------------------------------------------------------
   keep_main <- intersect(c("Level", "IsBase", "Exposure", "ClaimCount",
                            "IsThin", "Factor_Frequency", "Factor_Severity",
                            "Factor_Premium"),
                          names(rating_tbl))
   for (v in unique(rating_tbl$Variable[is.na(rating_tbl$Group)])) {
-    d <- rating_tbl[rating_tbl$Variable == v & is.na(rating_tbl$Group),
-                    keep_main, drop = FALSE]
+    rows <- rating_tbl$Variable == v & is.na(rating_tbl$Group)
+    d <- rating_tbl[rows, keep_main, drop = FALSE]
+    d <- .numeric_levels(d, rating_tbl, rows)
     write_sheet(v, d)
   }
 
@@ -121,8 +194,9 @@ export_rating_table <- function(rating_tbl, file = "rating_table.xlsx",
                           "Uplift_Severity", "Uplift_Premium"),
                         names(rating_tbl))
   for (v in unique(rating_tbl$Variable[!is.na(rating_tbl$Group)])) {
-    d  <- rating_tbl[rating_tbl$Variable == v & !is.na(rating_tbl$Group),
-                     keep_int, drop = FALSE]
+    rows <- rating_tbl$Variable == v & !is.na(rating_tbl$Group)
+    d  <- rating_tbl[rows, keep_int, drop = FALSE]
+    d  <- .numeric_levels(d, rating_tbl, rows)
     sn <- write_sheet(v, d)
 
     fac_col <- Filter(function(cc) cc %in% names(d) && any(!is.na(d[[cc]])),

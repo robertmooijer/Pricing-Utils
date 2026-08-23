@@ -69,6 +69,59 @@ test_that("the thin-cell column is correct", {
   expect_s3_class(make_rating_plot(tbl_thin, "REGIO"), "plotly")
 })
 
+test_that("continuous grids run in readable steps", {
+  set.seed(8)
+  ng <- 20000
+  dg <- data.frame(
+    LEEFTIJD = round(runif(ng, 18, 80)),
+    GEWICHT  = round(pmin(pmax(rnorm(ng, 1350, 250), 800), 2400), -1),
+    Exposure = round(runif(ng, .3, 1), 3))
+  dg$AantalClaims <- rpois(ng, dg$Exposure * exp(-1.7 + .02 *
+                                                   pmax(0, 30 - dg$LEEFTIJD)))
+  mg <- glm(AantalClaims ~ ns(LEEFTIJD, 4) + ns(GEWICHT, 3) +
+              offset(log(Exposure)), family = poisson(), data = dg)
+  tg <- make_rating_table(mg, NULL, data = dg)
+  lv <- function(t, v) t$LevelNum[t$Variable == v & is.na(t$Group)]
+
+  # a whole-number column with few enough values is listed value by value
+  age <- lv(tg, "LEEFTIJD")
+  expect_equal(unique(diff(age)), 1)
+  expect_true(all(age == round(age)))
+
+  # a wide column gets a rounded step instead
+  wt <- lv(tg, "GEWICHT")
+  expect_equal(length(unique(diff(wt))), 1)
+  step <- unique(diff(wt))
+  expect_true(all(abs(wt / step - round(wt / step)) < 1e-9))  # round multiples
+
+  # the base sits on the grid, so there is a row with factor exactly 1
+  for (v in c("LEEFTIJD", "GEWICHT")) {
+    s <- tg[tg$Variable == v & is.na(tg$Group), ]
+    expect_equal(sum(s$IsBase), 1)
+    expect_equal(s$Factor_Frequency[s$IsBase], 1)
+  }
+})
+
+test_that("grid_step can be set globally or per variable", {
+  set.seed(8)
+  ng <- 15000
+  dg <- data.frame(
+    LEEFTIJD = round(runif(ng, 18, 80)),
+    GEWICHT  = round(pmin(pmax(rnorm(ng, 1350, 250), 800), 2400), -1),
+    Exposure = round(runif(ng, .3, 1), 3))
+  dg$AantalClaims <- rpois(ng, dg$Exposure * exp(-1.6))
+  mg <- glm(AantalClaims ~ LEEFTIJD + GEWICHT + offset(log(Exposure)),
+            family = poisson(), data = dg)
+
+  t1 <- make_rating_table(mg, NULL, data = dg,
+                          grid_step = c(LEEFTIJD = 5, GEWICHT = 200))
+  expect_equal(unique(diff(t1$LevelNum[t1$Variable == "LEEFTIJD"])), 5)
+  expect_equal(unique(diff(t1$LevelNum[t1$Variable == "GEWICHT"])), 200)
+
+  t2 <- make_rating_table(mg, NULL, data = dg, grid_step = 10)
+  expect_equal(unique(diff(t2$LevelNum[t2$Variable == "GEWICHT"])), 10)
+})
+
 test_that("the rating table carries no credibility columns", {
   expect_false(any(grepl("^Credibility", names(tbl))))
   expect_null(attr(tbl, "credibility"))

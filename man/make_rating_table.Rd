@@ -13,7 +13,8 @@ make_rating_table(
   claims_col = "AantalClaims",
   base_level = c("first", "exposure"),
   trim = c(0, 1),
-  min_claims = 30
+  min_claims = 30,
+  grid_step = NULL
 )
 }
 \arguments{
@@ -43,6 +44,16 @@ shrinkage to a categorical level, so such a factor comes essentially
 from those few claims; it is dimmed by \code{\link[=make_rating_plot]{make_rating_plot()}} and
 greyed out by \code{\link[=export_rating_table]{export_rating_table()}}. Thin categorical levels also
 raise a warning.}
+
+\item{grid_step}{Step size for continuous grids. \code{NULL} (default)
+picks a readable step per variable: roughly \code{grid_res} points across
+the range, rounded to a 1 / 2 / 5 times a power of ten, and never
+fractional for a column that holds whole numbers. So an age runs 18,
+19, 20 and a vehicle weight 800, 850, 900 rather than 19.2653 and
+832.65. Pass a single number to force one step everywhere, or a named
+vector for specific variables, e.g. \code{c(LEEFTIJD = 1, GEWICHT = 100)}.
+The base point is snapped onto the grid, so the row with factor 1 is
+a value you would actually quote.}
 }
 \value{
 A data.frame with one row per level/grid point per variable
