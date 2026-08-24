@@ -80,6 +80,16 @@
   mu <- as.numeric(predict(model, type = "response"))
   has_offset <- !is.null(tr$offset) && any(tr$offset != 0)
 
+  # exp(offset) is only an exposure when the offset is a logarithm. With
+  # offset(Exposure) it is exp(Exposure), which is not a volume at all, so
+  # the counts branch below would weight by nonsense.
+  if (has_offset && identical(family(model)$link, "log") &&
+      isTRUE(!.offset_is_log(model)))
+    warning(fn, ": the model's offset is not a logarithm, so exp(offset) ",
+            "is not an exposure. The prior weights are used instead.",
+            call. = FALSE)
+  has_offset <- has_offset && !isTRUE(!.offset_is_log(model))
+
   out <- if (has_offset && identical(family(model)$link, "log")) {
     c(tr, list(actual = y, expected = mu, exposure = exp(tr$offset),
                claims = y, exposure_label = "Exposure", counts = TRUE))
@@ -120,6 +130,51 @@
   cut(x, breaks = brks, include.lowest = TRUE, dig.lab = 4)
 }
 
+# The offset's contribution to the linear predictor, evaluated on new data
+# from the model's own terms. Derived rather than assumed, so
+# offset(Exposure), offset(log(Months / 12)) and several offset terms at
+# once all come out right.
+.offset_value <- function(model, data) {
+  tt  <- terms(model)
+  idx <- attr(tt, "offset")
+  if (is.null(idx) || !length(idx)) return(rep(0, nrow(data)))
+  vars <- attr(tt, "variables")
+  env  <- environment(formula(model))
+  Reduce(`+`, lapply(idx, function(i)
+    as.numeric(eval(vars[[i + 1L]], data, env))))
+}
+
+# Prediction on the response scale with the offset taken back out.
+#
+# Setting the exposure column to 1 only neutralises an offset of the form
+# offset(log(Exposure)): with offset(Exposure) it leaves 1 instead of 0
+# (a factor e too high) and with offset(log(Months / 12)) it leaves
+# log(1 / 12) (a factor 12 out). Subtracting the offset the model actually
+# carries, on the link scale, is right for any offset and any link.
+#
+# Callers may still pin the offset columns to a constant before calling
+# this - make_pdp() does, because that is what lets it collapse the data to
+# unique predictor profiles - and the result is the same either way.
+.predict_no_offset <- function(model, newdata) {
+  eta <- as.numeric(predict(model, newdata = newdata, type = "link"))
+  family(model)$linkinv(eta - .offset_value(model, newdata))
+}
+
+# Is every offset term a logarithm? Only then is exp(offset) an exposure,
+# which the A/E and weighting code relies on.
+.offset_is_log <- function(model) {
+  tt  <- terms(model)
+  idx <- attr(tt, "offset")
+  if (is.null(idx) || !length(idx)) return(NA)
+  vars <- attr(tt, "variables")
+  all(vapply(idx, function(i) {
+    e <- vars[[i + 1L]]
+    if (is.call(e) && identical(as.character(e[[1L]])[1], "offset"))
+      e <- e[[2L]]
+    is.call(e) && identical(as.character(e[[1L]])[1], "log")
+  }, logical(1)))
+}
+
 # Variables appearing in the model's offset term, e.g. "Exposure" in
 # offset(log(Exposure)); never candidates for an interaction scan.
 .offset_vars <- function(model) {
@@ -158,26 +213,35 @@
 # is not the one in the linear predictor.
 .model_rate <- function(model, data, exposure_col, fn) {
   if (is.null(model)) return(rep(1, nrow(data)))
-  nd <- data
-  if (!is.null(model$offset)) {
-    ov  <- .offset_vars(model)
-    tgt <- if (length(ov)) ov else exposure_col
-    if (length(ov) && !exposure_col %in% ov)
-      warning(fn, ": the model offsets on '", paste(ov, collapse = ", "),
-              "' rather than on '", exposure_col, "'. That variable is the ",
-              "one held at 1, so the rates are per unit of it, while the ",
-              "weighting uses '", exposure_col, "'.", call. = FALSE)
-    hit <- intersect(tgt, names(nd))
-    if (!length(hit)) {
-      warning(fn, ": a model has an offset but none of its offset ",
-              "variable(s) (", paste(tgt, collapse = ", "), ") are in the ",
-              "data; the offset cannot be neutralised and the result is ",
-              "then not a rate per unit of exposure.", call. = FALSE)
-    } else {
-      for (v in hit) nd[[v]] <- 1
-    }
+  if (is.null(model$offset))
+    return(as.numeric(predict(model, newdata = data, type = "response")))
+
+  ov <- .offset_vars(model)
+  lk <- family(model)$link
+
+  # A rate per unit of exposure is a multiplicative idea, and only a log
+  # link makes the offset multiplicative. With any other link the offset
+  # can still be removed - and is - but what comes back is the prediction
+  # at zero offset, not something a second model can be multiplied onto.
+  if (!identical(lk, "log"))
+    warning(fn, ": the model has a '", lk, "' link, so the offset is not a ",
+            "multiplicative exposure. The prediction is returned with the ",
+            "offset removed, which is not a rate per unit of exposure and ",
+            "should not be multiplied by a second model.", call. = FALSE)
+  else if (length(ov) && !exposure_col %in% ov)
+    warning(fn, ": the model offsets on '", paste(ov, collapse = ", "),
+            "' rather than on '", exposure_col, "'. The rates are therefore ",
+            "per unit of that variable, while the weighting uses '",
+            exposure_col, "'.", call. = FALSE)
+
+  missing_ov <- setdiff(ov, names(data))
+  if (length(missing_ov)) {
+    warning(fn, ": offset variable(s) ", paste(missing_ov, collapse = ", "),
+            " are not in the data, so the offset cannot be evaluated and ",
+            "the result is not a rate per unit of exposure.", call. = FALSE)
+    return(as.numeric(predict(model, newdata = data, type = "response")))
   }
-  as.numeric(predict(model, newdata = nd, type = "response"))
+  .predict_no_offset(model, data)
 }
 
 # Old and new rate per policy, from either two model sets or an existing
@@ -234,7 +298,11 @@
 # invents a resolution the model does not have. That is worth saying out
 # loud rather than drawing.
 .exposure_bins <- function(score, weight, n_bins, fn = NULL) {
-  nd <- length(unique(score))
+  # Count ties at a tolerance, not bit for bit. Removing an offset on the
+  # link scale leaves rounding noise of order 1e-16, and predictions that
+  # are equal for every practical purpose would otherwise be counted as
+  # distinct and the warning would never fire where it matters most.
+  nd <- length(unique(signif(score, 12)))
   if (!is.null(fn) && nd < n_bins)
     warning(fn, ": only ", nd, " distinct predicted value(s) for ", n_bins,
             " bins, so policies with an identical prediction are split ",

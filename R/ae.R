@@ -81,15 +81,23 @@ plot_glm_predictor <- function(model, predictor,
   fam        <- family(model)
   has_offset <- !is.null(tr$offset) && any(tr$offset != 0)
 
-  if (has_offset && identical(fam$link, "log")) {
+  # exp(offset) recovers an exposure only when the link is log AND the
+  # offset is itself a logarithm; with offset(Exposure) it is exp(Exposure),
+  # which is not a volume. Both conditions are read off the model.
+  off_is_log <- isTRUE(.offset_is_log(model))
+  if (has_offset && identical(fam$link, "log") && off_is_log) {
     w        <- exp(tr$offset)           # offset(log(Exposure)) -> Exposure
     use_rate <- TRUE                     # response & predict are COUNTS -> /exposure
     w_title  <- "Exposure"
   } else {
-    if (has_offset)
+    if (has_offset && !identical(fam$link, "log"))
       warning("plot_glm_predictor: an offset is present but the link is ",
               "not 'log'; exp(offset) is then not an exposure. The prior ",
               "weights are used instead.", call. = FALSE)
+    if (has_offset && identical(fam$link, "log") && !off_is_log)
+      warning("plot_glm_predictor: the model's offset is not a logarithm, ",
+              "so exp(offset) is not an exposure. The prior weights are ",
+              "used instead.", call. = FALSE)
     w        <- tr$weights               # GLM weights (e.g. claim counts for severity)
     use_rate <- FALSE                    # response is already an average -> do not divide
     w_title  <- "Weight"

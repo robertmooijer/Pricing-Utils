@@ -109,6 +109,10 @@ make_pdp <- function(model,
         warning("make_pdp: an offset is present but the link is not 'log'; ",
                 "exp(offset) is then not an exposure and the weighting is ",
                 "unreliable.", call. = FALSE)
+      else if (isTRUE(!.offset_is_log(model)))
+        warning("make_pdp: the model's offset is not a logarithm, so ",
+                "exp(offset) is not an exposure and the weighting is ",
+                "unreliable.", call. = FALSE)
       exp(tr$offset)
     } else if (!all(tr$weights == 1)) {
       tr$weights                      # rate model with weights = exposure
@@ -121,18 +125,29 @@ make_pdp <- function(model,
     tr$weights                        # severity: prior weights = claim counts
   }
 
-  # Neutralise the offset: predict at exposure = 1, so the PDP is a
-  # frequency per unit of exposure (comparable to the observed line).
+  # Neutralise the offset, so the PDP is a frequency per unit of exposure
+  # and comparable to the observed line. The offset variables are pinned to
+  # a constant here because that is what lets the data collapse to unique
+  # predictor profiles below; the offset itself is then subtracted on the
+  # link scale by .predict_no_offset(), which is what makes this correct
+  # for offset(Exposure) and offset(log(Months / 12)) as well as for the
+  # usual offset(log(Exposure)).
   nd0 <- train_df
   if (has_offset) {
-    if (exposure_col %in% names(nd0)) {
-      nd0[[exposure_col]] <- 1
-    } else {
-      warning("make_pdp: the model has an offset but column '",
-              exposure_col, "' is not in the training data; the offset ",
-              "cannot be neutralised and the PDP is then NOT a frequency ",
-              "per unit of exposure.", call. = FALSE)
-    }
+    ov  <- .offset_vars(model)
+    hit <- intersect(ov, names(nd0))
+    for (v in hit) nd0[[v]] <- 1
+    if (length(setdiff(ov, names(nd0))))
+      warning("make_pdp: offset variable(s) ",
+              paste(setdiff(ov, names(nd0)), collapse = ", "),
+              " are not in the training data; the offset cannot be ",
+              "neutralised and the PDP is then NOT a frequency per unit ",
+              "of exposure.", call. = FALSE)
+    else if (!exposure_col %in% ov)
+      warning("make_pdp: the model offsets on '",
+              paste(ov, collapse = ", "), "' rather than on '", exposure_col,
+              "'; the PDP is per unit of that variable while the observed ",
+              "line and the bars use '", exposure_col, "'.", call. = FALSE)
   }
 
   # Grid ---------------------------------------------------------------------
@@ -183,7 +198,7 @@ make_pdp <- function(model,
   yhat <- vapply(seq_along(grid_vals), function(i) {
     nd <- prof
     nd[[pred_var]] <- .coerce_like(rep(grid_vals[i], nrow(nd)), x_train)
-    stats::weighted.mean(predict(model, newdata = nd, type = "response"),
+    stats::weighted.mean(.predict_no_offset(model, nd),
                          w = w_prof, na.rm = TRUE)
   }, numeric(1))
 

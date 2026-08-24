@@ -508,9 +508,14 @@ make_rating_table <- function(model_freq = NULL,
             call. = FALSE)
 
   # Intercepts (base values on the response scale, exposure = 1) ---------------
+  # The factors are ratios of two predictions that share the same base row,
+  # so whatever the offset contributes cancels there. The intercept is the
+  # one number that carries it, so it is the one that has to have the
+  # offset taken back out on the link scale rather than trusted to vanish
+  # because a column was set to 1 - which only works for offset(log(x)).
   intercept_val <- function(model) {
     if (is.null(model)) return(NA_real_)
-    as.numeric(predict(model, newdata = base_df_for(model), type = "response"))
+    as.numeric(.predict_no_offset(model, base_df_for(model)))
   }
 
   i_freq <- intercept_val(model_freq)

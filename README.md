@@ -763,11 +763,16 @@ density- or curvature-aware: a spline that bends sharply at young ages
 gets the same resolution as the flat stretch above 40.
 
 **Offsets and the base point.** Every variable the model offsets on is held
-at 1 in the base row, so `intercept × factors` is a rate per unit of
-exposure whatever that column is called. If the offset variable differs
-from `exposure_col`, the intercepts are still correct but the `Exposure`
-and `ClaimCount` columns are summed from a different column, and the
-function warns.
+at 1 in the base row, and the offset the model actually carries is then
+subtracted on the link scale, so `intercept × factors` is a rate per unit
+of exposure whatever that column is called and whatever form the offset
+takes — see [deriving the offset and the
+link](#deriving-the-offset-and-the-link). The factors themselves are ratios
+of two predictions that share the base row, so the offset cancels there
+either way; the intercept is the one number that carries it. If the offset
+variable differs from `exposure_col`, the intercepts are still correct but
+the `Exposure` and `ClaimCount` columns are summed from a different column,
+and the function warns.
 
 **Rows outside the grid.** With `trim`, policies beyond the trimmed range
 are excluded from the exposure histogram rather than swept into the outer
@@ -1069,7 +1074,7 @@ exposure or prior weight, `a` and `e` actual and expected claims in a cell.
 | [`agg_all()`](#agg_all) | frequency and severity per level | `Σclaims / Σexposure` and `Σloss / Σclaims` | — |
 | [`make_plot()`](#make_plot) | the observed one-way | as above, per level of one variable | — |
 | [`plot_glm_predictor()`](#plot_glm_predictor) | actual vs expected per bin | counts: `Σy/Σw` against `Σμ/Σw`; weighted models: prior-weight-weighted means | log link, to recover exposure as `exp(offset)` |
-| [`make_pdp()`](#make_pdp) | the partial effect on the response scale | weighted mean of `predict(type = "response")` per grid point, exposure set to 1 → [why](#why-the-pdp-is-computed-on-the-response-scale) | offset is `log(exposure)` |
+| [`make_pdp()`](#make_pdp) | the partial effect on the response scale | weighted mean of `predict(type = "response")` per grid point, offset subtracted on the link scale → [why](#why-the-pdp-is-computed-on-the-response-scale) | offset read from the model → [how](#deriving-the-offset-and-the-link) |
 | [`glm_diagnostics()`](#glm_diagnostics) | fit and dispersion | Pearson `χ²/df`; `1 − D/D₀` | → [overdispersion](#overdispersion) |
 | [`glm_collinearity()`](#glm_collinearity) | how far each term is explained by the others | generalised VIF, `GVIF^(1/(2·DF))` | terms, not coefficients |
 | [`model_lift()`](#model_lift) | risk separation across the book | `Σactual/Σw` against `Σpred/Σw` per equal-exposure bin; Gini on the Lorenz curve | → [what lift measures](#what-lift-and-gini-do-and-do-not-measure) |
@@ -1246,6 +1251,50 @@ dispersion and warns above 1.2: coefficient estimates remain consistent, but
 standard errors scale with √dispersion, so term selection based on naive
 Poisson p-values is anti-conservative. Refit with `quasipoisson()` or a
 negative binomial family when flagged.
+
+### Deriving the offset and the link
+
+Nothing assumes a log link or an offset of the form `log(exposure)`. Both
+are read off the fitted model: the link from `family(model)$link`, and the
+offset from `attr(terms(model), "offset")`, which is then **evaluated** on
+whatever data is being predicted.
+
+That matters because the obvious shortcut — set the exposure column to 1
+so `log(1) = 0` — only neutralises one particular offset. Measured on the
+same model and data, rate per unit of exposure:
+
+| Model | column set to 1 | offset subtracted | correct |
+|---|---|---|---|
+| `offset(log(Exposure))` | 0.13063 | 0.13063 | 0.13063 |
+| `offset(Exposure)` | 0.11764 | 0.04328 | 0.04328 |
+| `offset(log(Maanden/12))` | 0.01089 | 0.13063 | 0.13063 |
+
+The second is a factor `e` out, because setting the column to 1 leaves the
+offset at 1 rather than 0. The third is a factor 12 out, because it leaves
+`log(1/12)`. Subtracting the offset the model actually carries,
+
+$$\hat\mu_{\text{rate}} = g^{-1}\big(\hat\eta - \text{offset}\big)$$
+
+is right for any offset expression, any number of offset terms, and any
+link. Where the shortcut was already correct the two agree to 6·10⁻¹⁷.
+
+Three consequences worth knowing:
+
+- **Rating-table factors were never affected.** They are ratios of two
+  predictions that share the same base row, so the offset cancels. Only
+  the intercept carried it.
+- **A non-log link still gets its offset removed**, but the result is the
+  prediction at zero offset, not a multiplicative rate — nothing to
+  multiply a second model onto. That is now said explicitly rather than
+  assumed away.
+- **`exp(offset)` is only an exposure when the offset is a logarithm.**
+  With `offset(Exposure)` it is `exp(Exposure)`, which is not a volume, so
+  the A/E and weighting code falls back to the prior weights and says so.
+
+Removing the offset on the link scale leaves rounding noise of order
+10⁻¹⁶ where the shortcut produced bit-identical values, so the tie check
+in the lift charts counts distinct predictions at a tolerance rather than
+bit for bit.
 
 ### Reading a Q-Q plot of quantile residuals
 
@@ -1634,8 +1683,13 @@ make_pdp(model, raw_data, pred_var, metric = c("Frequency", "Severity"),
 **Returns.** A plotly object with three traces: exposure (or claim-count)
 bars, "Observed", and "PDP (model)".
 
-**Assumptions.** The offset is `log(exposure)` and the link is `log`;
-otherwise `exp(offset)` is not an exposure and a warning is raised.
+**Assumptions.** The offset is neutralised for any offset expression and
+any link, by subtracting the model's own offset on the link scale — see
+[deriving the offset and the
+link](#deriving-the-offset-and-the-link). The **weighting** is the part
+that still needs `log` on both counts: `exp(offset)` is an exposure only
+when the link is `log` and the offset is a logarithm, and a warning is
+raised for each of those separately.
 
 **Interpretation.** The observed line is a one-way marginal and includes
 correlations with every other rating factor; the PDP is a partial effect.
