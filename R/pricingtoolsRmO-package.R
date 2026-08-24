@@ -14,6 +14,8 @@
 #' @importFrom grDevices colorRampPalette
 #' @importFrom stats predict median quantile formula terms family residuals
 #'   fitted model.frame weighted.mean approx setNames nobs AIC aggregate
+#'   ppois pbinom pgamma pnorm qnorm qbeta runif coef cooks.distance
+#'   hatvalues rstandard update
 #' @importFrom utils head tail
 NULL
 

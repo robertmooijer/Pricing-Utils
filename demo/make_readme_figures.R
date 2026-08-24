@@ -176,6 +176,21 @@ snap(make_rating_plot(tbl, ivar, metric = "Premium"), "interaction")
 
 snap(plot_glm_residuals(m_freq), "residuals")
 
+# Q-Q of quantile residuals. Seeded, because the count case is randomised
+# and the README figure should not move between regenerations.
+snap(plot_glm_qq(m_freq, seed = 42), "qq")
+
+# Influence. An implanted keying error in a PREDICTOR - a 20-tonne car -
+# is the kind this plot actually finds: high leverage, and therefore a
+# residual that looks innocent because the fit bends to meet it. (A
+# low-exposure error is the opposite case and stays invisible here; see
+# the note in ?plot_glm_influence.)
+d_inf <- dat
+d_inf$GEWICHT[1]      <- 20000
+d_inf$AantalClaims[1] <- 3
+m_inf <- glm(formula(m_freq), family = poisson(), data = d_inf)
+snap(plot_glm_influence(m_inf, n_label = 6), "influence")
+
 # Interaction scan. Cell-level analysis needs volume: the portfolio above
 # has ~3k claims, which spread over 60 cells is mostly noise. So this
 # figure uses a bigger portfolio, with the model deliberately fitted

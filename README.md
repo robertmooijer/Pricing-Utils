@@ -31,6 +31,8 @@ on a secondary axis, horizontal legends) and export to PNG via the plotly mode b
   - [`glm_diagnostics()`](#glm_diagnostics)
   - [`glm_collinearity()`](#glm_collinearity)
   - [`plot_glm_residuals()`](#plot_glm_residuals)
+  - [`plot_glm_qq()`](#plot_glm_qq)
+  - [`plot_glm_influence()`](#plot_glm_influence)
   - [`detect_interactions()`](#detect_interactions)
   - [`plot_residual_heatmap()`](#plot_residual_heatmap)
   - [`screen_features()`](#screen_features)
@@ -465,6 +467,69 @@ bars per level instead of a ribbon.
 **Returns** a plotly object.
 
 ![Binned residual plot](man/figures/README-residuals.png)
+
+### `plot_glm_qq()`
+
+Normal Q-Q plot of **quantile residuals** — whether the spread and shape of
+the response match the family, as opposed to whether the mean is right.
+One model in, so it serves frequency and severity alike.
+
+```r
+plot_glm_qq(model, n_max = 5000, band = TRUE, seed = NULL,
+            title = NULL, y_range = NULL)
+```
+
+Base R's `plot(model)` draws a Q-Q of standardised **deviance** residuals,
+and for counts those are not normal — so the plot condemns a model that is
+exactly right. Measured on a correctly specified Poisson with 20,000 rows:
+
+| | quantile residuals | deviance residuals |
+|---|---|---|
+| KS test against N(0,1) | `p = 0.86` | `p < 2e-16` |
+| share outside ±1.96 (nominal 5%) | 5.1% | 11.2% |
+
+This function therefore uses the **randomised quantile residual** of Dunn
+and Smyth (1996): map each observation through its own fitted CDF —
+uniformly at random within the jump for a discrete response — then through
+`qnorm()`. Those are exactly standard normal under a correct model, so the
+reference is the identity line. Verified against `statmod::qresid()`:
+identical for Poisson, equal to 6e-14 for Gamma. See
+[reading a Q-Q plot](#reading-a-q-q-plot-of-quantile-residuals).
+
+**Returns** a plotly object, with the residuals attached as the
+`"residuals"` attribute.
+
+![Q-Q plot of quantile residuals](man/figures/README-qq.png)
+
+### `plot_glm_influence()`
+
+Which rows move the fit, and why: leverage against standardised residual,
+with Cook's distance as the marker size.
+
+```r
+plot_glm_influence(model, n_label = 10, data_cols = NULL, n_max = 5000,
+                   max_rows = 2e5, seed = NULL, title = NULL,
+                   y_range = NULL)
+```
+
+A point is influential because it is unusual in the predictors (far right),
+because it is badly fitted (far up or down), or both — and the plot
+separates those three cases, which a bare index plot of Cook's distance
+cannot. The `n_label` strongest are highlighted and returned as the
+`"influential"` attribute, with the model's own variables carried along so
+the row can be looked up.
+
+Deliberately **relative**: on a book of 100,000 policies no single row
+swings a coefficient, `D > 1` never triggers and `D > 4/n` flags thousands
+of ordinary rows. And influence is not misfit — on a Poisson the
+worst-fitted row in your book can have a leverage of 5·10⁻⁷ and be
+invisible here. Both points are worked through under [Cook's distance on a
+large book](#cooks-distance-on-a-large-book).
+
+**Returns** a plotly object, with the top rows attached as the
+`"influential"` attribute.
+
+![Influence plot](man/figures/README-influence.png)
 
 ### `detect_interactions()`
 
@@ -1007,6 +1072,8 @@ exposure or prior weight, `a` and `e` actual and expected claims in a cell.
 | [`model_lift()`](#model_lift) | risk separation across the book | `Σactual/Σw` against `Σpred/Σw` per equal-exposure bin; Gini on the Lorenz curve | → [what lift measures](#what-lift-and-gini-do-and-do-not-measure) |
 | [`double_lift()`](#double_lift) | which of two tariffs is right where they differ | A/E of each model per bin of the rate ratio `new/old` | rebased to equal totals |
 | [`plot_glm_residuals()`](#plot_glm_residuals) | binned residuals | mean residual per bin, band `±2·√(φ/n)` | the dispersion estimate `φ` |
+| [`plot_glm_qq()`](#plot_glm_qq) | does the response match the family | randomised quantile residual `Φ⁻¹(U(F(y⁻), F(y)))` → [why not deviance](#reading-a-q-q-plot-of-quantile-residuals) | a closed-form CDF for the family |
+| [`plot_glm_influence()`](#plot_glm_influence) | which rows move the fit | leverage vs standardised residual, sized by Cook's `D` | → [on a large book](#cooks-distance-on-a-large-book) |
 | [`detect_interactions()`](#detect_interactions) | interaction structure the GLM missed | `D = 2·Σ[a·log(a/e*) − (a − e*)]`, where `e*` is `e` raked to `a`'s margins; null by simulation → [why](#why-a-one-way-check-cannot-see-an-interaction) | Poisson counts (otherwise `χ²` scaled by `φ`) |
 | [`plot_residual_heatmap()`](#plot_residual_heatmap) | A/E per cell | `Σa / Σe` per cell of two variables | — |
 | [`screen_features()`](#screen_features) | incremental value of a candidate | increase in out-of-sample deviance when the feature is shuffled, baseline margin held fixed | a holdout split; log link |
@@ -1176,6 +1243,105 @@ dispersion and warns above 1.2: coefficient estimates remain consistent, but
 standard errors scale with √dispersion, so term selection based on naive
 Poisson p-values is anti-conservative. Refit with `quasipoisson()` or a
 negative binomial family when flagged.
+
+### Reading a Q-Q plot of quantile residuals
+
+A normal Q-Q plot of deviance residuals — what base R's `plot(model)` gives
+you — is close to useless for a frequency model, because deviance residuals
+of counts are simply not normal. On a correctly specified Poisson with
+20,000 rows, 11.2% fall outside a nominal 5% band and a Kolmogorov–Smirnov
+test rejects normality at `p < 2e-16`. The plot condemns a model that is
+exactly right, so it can tell you nothing about one that is not. Where the
+fitted mean varies little the residuals also collapse onto visible bands,
+because the response only takes a handful of values.
+
+`plot_glm_qq()` uses the **randomised quantile residual** instead (Dunn &
+Smyth, 1996). For a continuous response,
+
+$$r_i = \Phi^{-1}\!\big(F(y_i;\hat\mu_i,\hat\phi)\big)$$
+
+and for a discrete one the CDF jumps, so the value is drawn uniformly
+inside the jump:
+
+$$u_i \sim \mathrm{U}\big(F(y_i-1;\hat\mu_i),\,F(y_i;\hat\mu_i)\big),
+\qquad r_i = \Phi^{-1}(u_i)$$
+
+Under a correctly specified model these are **exactly** standard normal,
+discreteness included — 5.1% outside the band and `p = 0.86` on the same
+data. Per family:
+
+| Family | CDF used | Dispersion |
+|---|---|---|
+| Poisson | `ppois(y, μ)` with the jump randomised | fixed at 1 — that assumption is what the plot tests |
+| Gamma | `pgamma(y, shape = w/φ, scale = φμ/w)` | Pearson estimate |
+| binomial | `pbinom` on `y·w`, jump randomised | fixed at 1 |
+| gaussian | `pnorm(y, μ, √(φ/w))` | Pearson estimate |
+
+The Gamma parameterisation is the GLM's own assumption written out: mean
+`μ` and variance `φμ²/w`, which is exactly what `weights = AantalClaims`
+encodes on an average-claim-size response.
+
+Because the count case is randomised, two calls give slightly different
+pictures; pass `seed` for a reproducible one. The implementation is
+verified against `statmod::qresid()` — identical for Poisson, equal to
+6e-14 for Gamma.
+
+The other principled route is a **simulated envelope**, as `DHARMa` and
+`hnp` use: simulate from the fitted model and locate each observation in
+that distribution. It generalises further (mixed models, zero-inflation)
+but costs `n_sim` simulations per row, so the closed-form residual is the
+better fit for a large book. Its one advantage here is that the envelope
+accounts for the coefficients having been estimated, while the analytic
+band from the Beta order statistics treats them as known and is therefore
+marginally too narrow. The band is also pointwise, not simultaneous: with
+several thousand points a handful fall outside it even when the model is
+right. Read the shape, not the exceptions.
+
+### Cook's distance on a large book
+
+Cook's distance was designed for regressions with tens of observations,
+where one point can genuinely swing a coefficient:
+
+$$D_i = \frac{r_{P,i}^2\,h_i}{\phi\,p\,(1-h_i)^2}$$
+
+On a book of 100,000 policies no single row does. Every absolute rule of
+thumb breaks with it: `D > 1` never triggers, and `D > 4/n` — here
+`4 × 10⁻⁵` — flags thousands of perfectly ordinary rows. So
+`plot_glm_influence()` is deliberately **relative**: it ranks rows against
+each other and labels the worst `n_label`, rather than testing them
+against a threshold that does not apply. The only absolute reference kept
+is the leverage line at `2p/n`, which still means what it always did.
+
+What the ranking is good for is **data quality**: a vehicle weight of 20
+tonnes or an age of 200 lands at the top and is worth opening. It is a
+much weaker tool for model structure, where
+[`detect_interactions()`](#detect_interactions) and
+[`plot_glm_residuals()`](#plot_glm_residuals) have far more power, because
+structural misfit is spread over many rows and none of them stands out
+individually.
+
+**Influence is not misfit, and on a Poisson the two can be opposites.**
+The IRLS weight of a row is its fitted mean, so a policy with a sliver of
+exposure carries almost no weight in the design matrix and has almost no
+leverage — whatever its response. Measured over three seeds on 15,000-row
+books, implanting each classic keying error one at a time:
+
+| Implanted error | rank on Cook's `D` | rank on Pearson size | leverage |
+|---|---|---|---|
+| exposure 0.001 with claims | 26 / 35 / 43 | **1 / 1 / 1** | 5·10⁻⁷ |
+| vehicle weight 20 tonnes | **1 / 1 / 1** | 1691 / 15000 / 2304 | 0.91 |
+
+They are exact complements. The low-exposure row is the worst-fitted row
+in the book and Cook's distance cannot see it at all. The extreme-predictor
+row tops the Cook ranking and has an *unremarkable* residual — at a
+leverage of 0.9 the fit bends to meet it, so the point masks itself.
+
+That is why this is a two-axis plot and not an index plot of `D`: it
+separates *unusual in the predictors* (far right) from *badly fitted* (far
+up or down), and neither axis alone finds both errors. A residual check —
+[`plot_glm_qq()`](#plot_glm_qq) or
+[`plot_glm_residuals()`](#plot_glm_residuals) — is the complement that
+catches the low-exposure case.
 
 ---
 
@@ -1695,6 +1861,101 @@ means fall inside the band. A systematic run outside it — a curve over a
 predictor, a drift with the fitted value — points to missed structure.
 
 **Cost.** O(n).
+
+---
+
+### `plot_glm_qq()` specification
+
+**Purpose.** Check the distributional assumption — does the spread and
+shape of the response match the family — for a frequency or a severity
+model alike.
+
+```r
+plot_glm_qq(model, n_max = 5000, band = TRUE, seed = NULL,
+            title = NULL, y_range = NULL)
+```
+
+| Argument | Type | Default | Meaning |
+|---|---|---|---|
+| `model` | glm | — | Poisson, quasipoisson, binomial, Gamma or gaussian; anything else falls back to deviance residuals with a warning |
+| `n_max` | integer | `5000` | points drawn, evenly spaced through the sorted residuals with both extremes kept; the residuals are computed on every row regardless |
+| `band` | logical | `TRUE` | draw the pointwise 95% envelope |
+| `seed` | integer or NULL | `NULL` | fixes the randomisation used on a discrete response |
+
+**Algorithm.**
+
+1. Map each observation through its own fitted CDF. Continuous response:
+   `u = F(y; μ̂, φ̂)`. Discrete: `u ~ U(F(y−1; μ̂), F(y; μ̂))`, drawn
+   independently per row.
+2. `r = Φ⁻¹(u)`, clamped away from 0 and 1 so an extreme observation is
+   not silently dropped to `±Inf`.
+3. Sort, and plot against `Φ⁻¹((i − ½)/n)` (Hazen positions).
+4. The band is `Φ⁻¹(qbeta(0.025 | 0.975, i, n − i + 1))`, the pointwise
+   interval of the `i`-th order statistic of a standard normal sample.
+
+Dispersion follows the family: fixed at 1 for Poisson and binomial —
+that assumption is precisely what the plot tests, so estimating it would
+hide what is being looked for — and the Pearson estimate for Gamma and
+gaussian. See [reading a Q-Q
+plot](#reading-a-q-q-plot-of-quantile-residuals) for the per-family CDFs
+and the comparison against deviance residuals.
+
+**Returns.** A plotly object; `attr(p, "residuals")` holds the residuals
+for every row and `attr(p, "type")` is `"quantile"` or `"deviance"`.
+
+**Warnings.** A family without a closed-form CDF here falls back to
+deviance residuals and says so. A quasipoisson is drawn with the Poisson
+CDF, which ignores the estimated overdispersion, and says so.
+
+**Verification.** Identical to `statmod::qresid()` for Poisson and equal
+to 6e-14 for Gamma; on a correctly specified Poisson the residuals pass a
+KS test against N(0,1) at `p = 0.86` where deviance residuals fail at
+`p < 2e-16`.
+
+**Cost.** One CDF evaluation per row plus a sort, O(n log n).
+
+---
+
+### `plot_glm_influence()` specification
+
+**Purpose.** Find the rows that move the fit and show why they do.
+
+```r
+plot_glm_influence(model, n_label = 10, data_cols = NULL, n_max = 5000,
+                   max_rows = 2e5, seed = NULL, title = NULL,
+                   y_range = NULL)
+```
+
+| Argument | Type | Default | Meaning |
+|---|---|---|---|
+| `n_label` | integer | `10` | rows highlighted and returned |
+| `data_cols` | character or NULL | `NULL` | extra training-data columns for the tooltip and table; `NULL` = the model's own base variables |
+| `n_max` | integer | `5000` | ordinary points drawn; the labelled rows are always on top of them |
+| `max_rows` | integer or NULL | `2e5` | refit on a sample of at most this many rows before computing leverage; `NULL` uses all |
+
+**Algorithm.** `stats::cooks.distance()`, `hatvalues()` and
+`rstandard(type = "deviance")` on the fitted model, plotted as leverage
+(x) against standardised residual (y) with marker **area** proportional
+to Cook's `D`, so twice the influence does not look four times the size.
+Reference lines at `y = 0` and at a leverage of `2p/n`.
+
+**Returns.** A plotly object; `attr(p, "influential")` is a data.frame of
+the `n_label` strongest rows: `Row`, `CooksD`, `Leverage`, `StdResid`,
+`Actual`, `Fitted` and the `data_cols`.
+
+**Sampling.** Leverage depends on the whole design matrix, so a sample is
+not a subset of the full-data values — the model is refitted on the
+sample and the values are the sample's own. This is announced with a
+message. It needs a model fitted with `data =`; without one, pass
+`max_rows = NULL`.
+
+**Interpretation.** Read it as a ranking, not a test — see [Cook's
+distance on a large book](#cooks-distance-on-a-large-book). Its real use
+is data quality: the top rows on a pricing model are usually keying
+errors.
+
+**Cost.** A QR decomposition of the weighted design matrix, O(n·p²),
+which is why `max_rows` exists.
 
 ---
 
