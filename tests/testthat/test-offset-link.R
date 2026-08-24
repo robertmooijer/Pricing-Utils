@@ -131,3 +131,68 @@ test_that("exp(offset) is not read as an exposure when it is not one", {
   parts <- suppressWarnings(.glm_ae_parts(m, "t"))
   expect_identical(parts$exposure_label, "Weight")
 })
+
+test_that("an offset passed as an argument is neutralised too", {
+  # glm(y ~ x, offset = log(E)) never reaches attr(terms, "offset"); it
+  # survives only as the unevaluated call in model$call$offset, which is
+  # exactly where predict.lm looks. Reading only the terms left the offset
+  # in the prediction, silently, and 70% wrong.
+  truth <- function(m) as.vector(exp(coef(m)[1] + coef(m)[2] * (dol$R == "Z")))
+
+  m_arg <- glm(AantalClaims ~ R, poisson(), dol, offset = log(Exposure))
+  expect_identical(attr(terms(m_arg), "offset"), NULL)   # not in the terms
+  expect_identical(.offset_vars(m_arg), "Exposure")      # found anyway
+  expect_true(.offset_is_log(m_arg))
+  expect_equal(.model_rate(m_arg, dol, "Exposure", "t"), truth(m_arg),
+               tolerance = 1e-10)
+
+  # an expression, and one without a log, from the same place
+  m_expr <- glm(AantalClaims ~ R, poisson(), dol, offset = log(Maanden / 12))
+  expect_equal(.model_rate(m_expr, dol, "Exposure", "t"), truth(m_expr),
+               tolerance = 1e-10)
+  m_raw <- glm(AantalClaims ~ R, poisson(), dol, offset = Exposure)
+  expect_false(.offset_is_log(m_raw))
+  expect_equal(.model_rate(m_raw, dol, "Exposure", "t"), truth(m_raw),
+               tolerance = 1e-10)
+})
+
+test_that("offsets from the formula and the argument add up", {
+  # a model may carry both, and predict.lm sums them; so must we. The
+  # argument's variables have to live in the data being scored, because
+  # predict.lm evaluates model$call$offset against newdata alone.
+  dd <- dol
+  dd$const <- 0.1
+  m <- glm(AantalClaims ~ R + offset(log(Exposure)), poisson(), dd,
+           offset = const)
+  eta_bare <- as.numeric(model.matrix(m) %*% coef(m))
+  eta_pred <- as.numeric(predict(m, newdata = dd, type = "link"))
+  # what predict adds is exactly what we take out
+  expect_equal(.offset_value(m, dd), eta_pred - eta_bare, tolerance = 1e-10)
+  expect_equal(.model_rate(m, dd, "Exposure", "t"), exp(eta_bare),
+               tolerance = 1e-10)
+  expect_setequal(.offset_vars(m), c("Exposure", "const"))
+})
+
+test_that("an offset that cannot be evaluated per row is refused", {
+  # A pre-computed vector carries no expression to re-evaluate, only a
+  # name, and what it holds belongs to the rows the model was fitted on.
+  # Base R has the same limit - predict.lm evaluates the offset call
+  # against newdata alone - so this must fail loudly rather than come back
+  # with a prediction that still has the offset in it.
+  dd <- dol
+  dd$off <- log(dd$Exposure)
+  m <- glm(AantalClaims ~ R, poisson(), dd, offset = off)
+  expect_equal(.model_rate(m, dd, "Exposure", "t"),
+               as.vector(exp(coef(m)[1] + coef(m)[2] * (dd$R == "Z"))),
+               tolerance = 1e-10)
+
+  # scoring data that does not carry the offset column at all
+  expect_error(suppressWarnings(
+    .model_rate(m, dd[, setdiff(names(dd), "off")], "Exposure", "t")),
+    "could not be evaluated")
+
+  # and a length that cannot line up with the rows being scored
+  short <- dd[1:50, ]
+  short$off <- log(dol$Exposure)[1:50]
+  expect_equal(length(.offset_value(m, short)), 50L)
+})

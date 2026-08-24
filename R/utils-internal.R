@@ -130,18 +130,48 @@
   cut(x, breaks = brks, include.lowest = TRUE, dig.lab = 4)
 }
 
-# The offset's contribution to the linear predictor, evaluated on new data
-# from the model's own terms. Derived rather than assumed, so
-# offset(Exposure), offset(log(Months / 12)) and several offset terms at
-# once all come out right.
-.offset_value <- function(model, data) {
+# Every unevaluated offset expression the model carries.
+#
+# There are two places one can hide. Inside the formula, as
+# offset(log(Exposure)), it lands in attr(terms, "offset"). Passed as a
+# separate argument, glm(y ~ x, offset = log(Exposure)), it never reaches
+# the terms at all and only survives as the unevaluated call in
+# model$call$offset. A model can carry both, in which case they add.
+# predict.lm reads exactly these two places, so following it keeps us in
+# step with what predict() itself puts into the linear predictor.
+.offset_exprs <- function(model) {
+  out <- list()
   tt  <- terms(model)
   idx <- attr(tt, "offset")
-  if (is.null(idx) || !length(idx)) return(rep(0, nrow(data)))
-  vars <- attr(tt, "variables")
-  env  <- environment(formula(model))
-  Reduce(`+`, lapply(idx, function(i)
-    as.numeric(eval(vars[[i + 1L]], data, env))))
+  if (!is.null(idx) && length(idx)) {
+    vars <- attr(tt, "variables")
+    out <- c(out, lapply(idx, function(i) vars[[i + 1L]]))
+  }
+  co <- if (!is.null(model$call)) model$call$offset else NULL
+  if (!is.null(co)) out <- c(out, list(co))
+  out
+}
+
+# The offset's contribution to the linear predictor, evaluated on new data.
+# Derived rather than assumed, so offset(Exposure), offset(log(Months / 12)),
+# several offset terms at once and the offset = argument all come out right.
+.offset_value <- function(model, data) {
+  ex <- .offset_exprs(model)
+  if (!length(ex)) return(rep(0, nrow(data)))
+  env <- environment(formula(model))
+  v <- lapply(ex, function(e) as.numeric(eval(e, data, env)))
+  # An offset handed over as an already-computed vector cannot be
+  # re-evaluated per row of other data: its expression is just a name, and
+  # what it resolves to belongs to the rows it was fitted on. Recycling it
+  # would produce a confidently wrong number, so refuse instead.
+  bad <- vapply(v, function(x) length(x) != nrow(data), logical(1))
+  if (any(bad))
+    stop("pricingtoolsRmO: the model's offset (",
+         paste(vapply(ex[bad], function(e) deparse(e)[1], character(1)),
+               collapse = ", "), ") does not evaluate to one value per row ",
+         "of this data, so it cannot be neutralised. Put the offset in the ",
+         "formula, as offset(log(Exposure)), and refit.", call. = FALSE)
+  Reduce(`+`, v)
 }
 
 # Prediction on the response scale with the offset taken back out.
@@ -163,12 +193,9 @@
 # Is every offset term a logarithm? Only then is exp(offset) an exposure,
 # which the A/E and weighting code relies on.
 .offset_is_log <- function(model) {
-  tt  <- terms(model)
-  idx <- attr(tt, "offset")
-  if (is.null(idx) || !length(idx)) return(NA)
-  vars <- attr(tt, "variables")
-  all(vapply(idx, function(i) {
-    e <- vars[[i + 1L]]
+  ex <- .offset_exprs(model)
+  if (!length(ex)) return(NA)
+  all(vapply(ex, function(e) {
     if (is.call(e) && identical(as.character(e[[1L]])[1], "offset"))
       e <- e[[2L]]
     is.call(e) && identical(as.character(e[[1L]])[1], "log")
@@ -179,11 +206,9 @@
 # offset(log(Exposure)); never candidates for an interaction scan.
 .offset_vars <- function(model) {
   if (is.null(model)) return(character(0))
-  tt  <- terms(model)
-  idx <- attr(tt, "offset")
-  if (is.null(idx) || !length(idx)) return(character(0))
-  vars <- attr(tt, "variables")
-  unique(unlist(lapply(idx, function(i) all.vars(vars[[i + 1L]]))))
+  ex <- .offset_exprs(model)
+  if (!length(ex)) return(character(0))
+  unique(unlist(lapply(ex, all.vars)))
 }
 
 # Threads to hand to the booster. R CMD check and CRAN cap what a package
@@ -234,14 +259,18 @@
             "per unit of that variable, while the weighting uses '",
             exposure_col, "'.", call. = FALSE)
 
-  missing_ov <- setdiff(ov, names(data))
-  if (length(missing_ov)) {
-    warning(fn, ": offset variable(s) ", paste(missing_ov, collapse = ", "),
-            " are not in the data, so the offset cannot be evaluated and ",
-            "the result is not a rate per unit of exposure.", call. = FALSE)
-    return(as.numeric(predict(model, newdata = data, type = "response")))
-  }
-  .predict_no_offset(model, data)
+  # Whether the offset can be neutralised is not a question of its
+  # variables being columns of `data`: offset = rep(0.1, n) resolves `n`
+  # from the formula's environment and is perfectly evaluable. Let the
+  # evaluation itself be the test, and fail loudly rather than hand back a
+  # prediction that still has the offset in it.
+  out <- tryCatch(.predict_no_offset(model, data),
+                  error = function(e) e)
+  if (inherits(out, "error"))
+    stop(fn, ": the model has an offset that could not be evaluated on this ",
+         "data, so the result would not be a rate per unit of exposure. ",
+         conditionMessage(out), call. = FALSE)
+  out
 }
 
 # Old and new rate per policy, from either two model sets or an existing

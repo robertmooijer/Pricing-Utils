@@ -1515,14 +1515,19 @@ negative binomial family when flagged.
 
 ### Deriving the offset and the link
 
-Nothing assumes a log link or an offset of the form `log(exposure)`. Both
-are read off the fitted model: the link from `family(model)$link`, and the
-offset from `attr(terms(model), "offset")`, which is then **evaluated** on
-whatever data is being predicted.
+Everything needed is on the fitted model, so nothing is assumed. The link
+and its inverse come from `family(model)`, and the offset from the model's
+own terms, so the neutralised prediction is simply
 
-That matters because the obvious shortcut, set the exposure column to 1 so
-`log(1) = 0`, only neutralises one particular offset. Measured on the same
-model and data, rate per unit of exposure:
+$$\hat\mu_{\text{rate}} = g^{-1}\big(\hat\eta - \text{offset}\big)$$
+
+which is exact for **any** link and **any** offset expression. No family
+is a special case and none is unsupported.
+
+That is worth spelling out because the obvious shortcut, set the exposure
+column to 1 so `log(1) = 0`, silently is not. It neutralises exactly one
+offset and mis-scales the rest. Measured on the same model and data, rate
+per unit of exposure:
 
 | Model | column set to 1 | offset subtracted | correct |
 |---|---|---|---|
@@ -1530,27 +1535,58 @@ model and data, rate per unit of exposure:
 | `offset(Exposure)` | 0.11764 | 0.04328 | 0.04328 |
 | `offset(log(Maanden/12))` | 0.01089 | 0.13063 | 0.13063 |
 
-The second is a factor `e` out, because setting the column to 1 leaves the
-offset at 1 rather than 0. The third is a factor 12 out, because it leaves
-`log(1/12)`. Subtracting the offset the model actually carries,
+A factor `e` out on the second, because setting the column to 1 leaves the
+offset at 1 rather than 0, and a factor 12 out on the third, because it
+leaves `log(1/12)`. Where the shortcut was already right the two agree to
+6·10⁻¹⁷.
 
-$$\hat\mu_{\text{rate}} = g^{-1}\big(\hat\eta - \text{offset}\big)$$
+#### Where the offset can hide
 
-is right for any offset expression, any number of offset terms, and any
-link. Where the shortcut was already correct the two agree to 6·10⁻¹⁷.
+An offset reaches a `glm` by two different routes, and only one of them
+lands in `terms()`:
 
-Three consequences worth knowing:
+```r
+glm(y ~ x + offset(log(E)), ...)   # in the formula  -> attr(terms, "offset")
+glm(y ~ x, offset = log(E), ...)   # as an argument  -> model$call$offset
+```
 
-- **Rating-table factors were never affected.** They are ratios of two
-  predictions that share the same base row, so the offset cancels. Only
-  the intercept carried it.
-- **A non-log link still gets its offset removed**, but the result is the
-  prediction at zero offset, not a multiplicative rate, nothing to
-  multiply a second model onto. That is now said explicitly rather than
-  assumed away.
-- **`exp(offset)` is only an exposure when the offset is a logarithm.**
-  With `offset(Exposure)` it is `exp(Exposure)`, which is not a volume, so
-  the A/E and weighting code falls back to the prior weights and says so.
+Both are read, and a model carrying both has them added, which is exactly
+what `predict.lm` does internally. How the formula was *written* makes no
+difference: `as.formula("y ~ x + offset(log(E))")`, a `paste()`
+construction and `update()` all give the same terms object.
+
+The argument form carries one constraint, and it is base R's rather than
+ours: `predict.lm` evaluates `model$call$offset` against `newdata` alone,
+with no fallback to the environment the model was fitted in. So the
+variables the offset names must be **columns of the data being scored**.
+`offset = log(Exposure)` is fine, because `Exposure` travels with the
+data; `offset = some_vector_from_the_workspace` is not, and scoring it
+raises an error rather than recycling into a confidently wrong number.
+Putting the offset in the formula avoids the question entirely.
+
+#### What the link does and does not decide
+
+The link does not decide whether the offset can be removed, only what the
+result **means**:
+
+- **A log link makes the model multiplicative**, so removing the offset
+  gives a rate that a second model may be multiplied onto. That is what
+  the frequency × severity workflow rests on.
+- **Any other link is additive on its own scale.** The offset still comes
+  out, and the prediction at zero offset is exactly right, but it is not a
+  multiplicative rate and multiplying a severity model onto it means
+  nothing. The functions say so rather than let it pass.
+
+One genuinely separate question is whether `exp(offset)` is an exposure,
+which is used for weighting rather than for prediction. It is one only
+when the offset is a **logarithm**: with `offset(Exposure)` it is
+`exp(Exposure)`, not a volume. That is also read off the model, and the
+A/E and weighting code falls back to the prior weights and says why.
+
+**Rating-table factors were never affected** by any of this. They are
+ratios of two predictions that share the same base row, so whatever the
+offset contributes cancels. The intercept is the one number that carried
+it.
 
 Removing the offset on the link scale leaves rounding noise of order 10⁻¹⁶
 where the shortcut produced bit-identical values, so the tie check in the
