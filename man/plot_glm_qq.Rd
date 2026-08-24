@@ -45,25 +45,33 @@ mean is right (that is what \code{\link[=plot_glm_predictor]{plot_glm_predictor(
 response match the family. Takes a single model, so it serves a
 frequency and a severity model alike.
 }
-\section{Why not deviance residuals}{
-Base R's \code{plot(model)} gives a normal Q-Q of standardised deviance
-residuals, and for count data those are simply not normal. On a
-correctly specified Poisson with 20,000 rows, 11.2\% of the deviance
-residuals fall outside a nominal 5\% band and a Kolmogorov-Smirnov test
-rejects normality at \code{p < 2e-16} - the plot condemns a model that is
-exactly right. Where the fitted mean varies little the same residuals
-also collapse onto visible bands, because the response only takes a
-handful of values.
+\section{Why not the classical residuals}{
+Base R's \code{plot(model)} draws its Q-Q panel from
+\code{rstandard(type = "pearson")}, and \code{boot::glm.diag.plots()} from
+standardised deviance residuals. For count data neither is normal. On a
+correctly specified Poisson with 20,000 rows, 87\% of them claim-free:\tabular{lll}{
+   residual \tab outside a nominal 5\% band \tab KS test vs N(0,1) \cr
+   base R, std. Pearson \tab 8.34\% \tab \code{p < 2e-16} \cr
+   \code{boot}, std. deviance \tab 1.31\% \tab \code{p < 2e-16} \cr
+   quantile residual \tab 5.10\% \tab \code{p = 0.86} \cr
+}
+
+
+The two classical ones fail in opposite directions - Pearson too heavy
+in the tails, deviance too light - and both reject a model that is
+exactly right, so neither can say anything about one that is not. Where
+the fitted mean varies little they also collapse onto visible bands,
+because the response takes only a handful of values. (\code{car::qqPlot()}
+declines to draw one for a glm at all.)
 
 This function instead uses the \strong{randomised quantile residual} of Dunn
 and Smyth (1996): each observation is mapped through its own fitted CDF,
 uniformly at random within the jump for a discrete response, and then
 through \code{qnorm()}. Under a correctly specified model these are exactly
 standard normal, discreteness and all, so the reference line is the
-identity and a departure means something. On the same data they give
-5.1\% outside the band and \code{p = 0.86}. The implementation is verified
-against \code{statmod::qresid()}, the reference by one of the authors:
-identical for Poisson, equal to 6e-14 for Gamma.
+identity and a departure means something. The implementation is
+verified against \code{statmod::qresid()}, the reference by one of the
+authors: identical for Poisson, equal to 6e-14 for Gamma.
 
 The other principled route is a simulated envelope, as \code{DHARMa} and
 \code{hnp} use: simulate from the fitted model and locate each observation

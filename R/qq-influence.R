@@ -3,14 +3,20 @@
 # Both functions here take a single model, so they serve a frequency and a
 # severity model alike; the family decides what is computed.
 #
-# A normal Q-Q plot of deviance residuals - what base R's plot(glm) draws -
-# is close to useless for a frequency model, because deviance residuals of
-# counts are not normal. Measured on a correctly specified Poisson with
-# 20,000 rows: 11.2% outside a nominal 5% band, KS p < 2e-16. The plot
-# condemns a model that is exactly right. The randomised quantile residual
-# of Dunn and Smyth (1996) is exactly standard normal instead, discreteness
-# included (5.1%, p = 0.86 on the same data), which is what makes a Q-Q
-# plot readable for counts at all. Verified identical to statmod::qresid().
+# A normal Q-Q of the classical residuals is close to useless for a
+# frequency model, because none of them are normal for counts. Measured on
+# a correctly specified Poisson with 20,000 rows (87% of them claim-free),
+# share outside a nominal 5% band and a KS test against N(0,1):
+#
+#   base R plot(glm), std. Pearson    8.34%    p < 2e-16
+#   boot::glm.diag,   std. deviance   1.31%    p < 2e-16
+#   quantile residual                 5.10%    p = 0.86
+#
+# The two classical ones fail in opposite directions - Pearson too heavy,
+# deviance too light - and both condemn a model that is exactly right. The
+# randomised quantile residual of Dunn and Smyth (1996) is exactly standard
+# normal instead, discreteness included, which is what makes a Q-Q plot
+# readable for counts at all. Verified identical to statmod::qres.pois().
 
 # Dispersion the reference distribution should use. Poisson and binomial
 # fix it at 1 by assumption, and that assumption is exactly what the plot
@@ -69,26 +75,34 @@
 #' frequency and a severity model alike.
 #'
 #' @details
-#' # Why not deviance residuals
+#' # Why not the classical residuals
 #'
-#' Base R's `plot(model)` gives a normal Q-Q of standardised deviance
-#' residuals, and for count data those are simply not normal. On a
-#' correctly specified Poisson with 20,000 rows, 11.2% of the deviance
-#' residuals fall outside a nominal 5% band and a Kolmogorov-Smirnov test
-#' rejects normality at `p < 2e-16` - the plot condemns a model that is
-#' exactly right. Where the fitted mean varies little the same residuals
-#' also collapse onto visible bands, because the response only takes a
-#' handful of values.
+#' Base R's `plot(model)` draws its Q-Q panel from
+#' `rstandard(type = "pearson")`, and `boot::glm.diag.plots()` from
+#' standardised deviance residuals. For count data neither is normal. On a
+#' correctly specified Poisson with 20,000 rows, 87% of them claim-free:
+#'
+#' | residual | outside a nominal 5% band | KS test vs N(0,1) |
+#' |---|---|---|
+#' | base R, std. Pearson | 8.34% | `p < 2e-16` |
+#' | `boot`, std. deviance | 1.31% | `p < 2e-16` |
+#' | quantile residual | 5.10% | `p = 0.86` |
+#'
+#' The two classical ones fail in opposite directions - Pearson too heavy
+#' in the tails, deviance too light - and both reject a model that is
+#' exactly right, so neither can say anything about one that is not. Where
+#' the fitted mean varies little they also collapse onto visible bands,
+#' because the response takes only a handful of values. (`car::qqPlot()`
+#' declines to draw one for a glm at all.)
 #'
 #' This function instead uses the **randomised quantile residual** of Dunn
 #' and Smyth (1996): each observation is mapped through its own fitted CDF,
 #' uniformly at random within the jump for a discrete response, and then
 #' through `qnorm()`. Under a correctly specified model these are exactly
 #' standard normal, discreteness and all, so the reference line is the
-#' identity and a departure means something. On the same data they give
-#' 5.1% outside the band and `p = 0.86`. The implementation is verified
-#' against `statmod::qresid()`, the reference by one of the authors:
-#' identical for Poisson, equal to 6e-14 for Gamma.
+#' identity and a departure means something. The implementation is
+#' verified against `statmod::qresid()`, the reference by one of the
+#' authors: identical for Poisson, equal to 6e-14 for Gamma.
 #'
 #' The other principled route is a simulated envelope, as `DHARMa` and
 #' `hnp` use: simulate from the fitted model and locate each observation

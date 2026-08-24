@@ -479,14 +479,17 @@ plot_glm_qq(model, n_max = 5000, band = TRUE, seed = NULL,
             title = NULL, y_range = NULL)
 ```
 
-Base R's `plot(model)` draws a Q-Q of standardised **deviance** residuals,
-and for counts those are not normal — so the plot condemns a model that is
-exactly right. Measured on a correctly specified Poisson with 20,000 rows:
+Base R's `plot(model)` draws its Q-Q panel from
+`rstandard(type = "pearson")` and `boot::glm.diag.plots()` from
+standardised deviance residuals. For counts neither is normal, so both
+condemn a model that is exactly right. Measured on a correctly specified
+Poisson with 20,000 rows, 87% of them claim-free:
 
-| | quantile residuals | deviance residuals |
+| residual | outside ±1.96 (nominal 5%) | KS test vs N(0,1) |
 |---|---|---|
-| KS test against N(0,1) | `p = 0.86` | `p < 2e-16` |
-| share outside ±1.96 (nominal 5%) | 5.1% | 11.2% |
+| base R, std. Pearson | 8.34% | `p < 2e-16` |
+| `boot`, std. deviance | 1.31% | `p < 2e-16` |
+| **quantile residual** | **5.10%** | **`p = 0.86`** |
 
 This function therefore uses the **randomised quantile residual** of Dunn
 and Smyth (1996): map each observation through its own fitted CDF —
@@ -1072,7 +1075,7 @@ exposure or prior weight, `a` and `e` actual and expected claims in a cell.
 | [`model_lift()`](#model_lift) | risk separation across the book | `Σactual/Σw` against `Σpred/Σw` per equal-exposure bin; Gini on the Lorenz curve | → [what lift measures](#what-lift-and-gini-do-and-do-not-measure) |
 | [`double_lift()`](#double_lift) | which of two tariffs is right where they differ | A/E of each model per bin of the rate ratio `new/old` | rebased to equal totals |
 | [`plot_glm_residuals()`](#plot_glm_residuals) | binned residuals | mean residual per bin, band `±2·√(φ/n)` | the dispersion estimate `φ` |
-| [`plot_glm_qq()`](#plot_glm_qq) | does the response match the family | randomised quantile residual `Φ⁻¹(U(F(y⁻), F(y)))` → [why not deviance](#reading-a-q-q-plot-of-quantile-residuals) | a closed-form CDF for the family |
+| [`plot_glm_qq()`](#plot_glm_qq) | does the response match the family | randomised quantile residual `Φ⁻¹(U(F(y⁻), F(y)))` → [why not the classical residuals](#reading-a-q-q-plot-of-quantile-residuals) | a closed-form CDF for the family |
 | [`plot_glm_influence()`](#plot_glm_influence) | which rows move the fit | leverage vs standardised residual, sized by Cook's `D` | → [on a large book](#cooks-distance-on-a-large-book) |
 | [`detect_interactions()`](#detect_interactions) | interaction structure the GLM missed | `D = 2·Σ[a·log(a/e*) − (a − e*)]`, where `e*` is `e` raked to `a`'s margins; null by simulation → [why](#why-a-one-way-check-cannot-see-an-interaction) | Poisson counts (otherwise `χ²` scaled by `φ`) |
 | [`plot_residual_heatmap()`](#plot_residual_heatmap) | A/E per cell | `Σa / Σe` per cell of two variables | — |
@@ -1246,14 +1249,31 @@ negative binomial family when flagged.
 
 ### Reading a Q-Q plot of quantile residuals
 
-A normal Q-Q plot of deviance residuals — what base R's `plot(model)` gives
-you — is close to useless for a frequency model, because deviance residuals
-of counts are simply not normal. On a correctly specified Poisson with
-20,000 rows, 11.2% fall outside a nominal 5% band and a Kolmogorov–Smirnov
-test rejects normality at `p < 2e-16`. The plot condemns a model that is
-exactly right, so it can tell you nothing about one that is not. Where the
-fitted mean varies little the residuals also collapse onto visible bands,
-because the response only takes a handful of values.
+A normal Q-Q plot of the classical residuals is close to useless for a
+frequency model, because for counts none of them are normal. What the
+standard tools actually draw:
+
+| Package | Q-Q of a glm uses |
+|---|---|
+| base R `plot(model)` | `rstandard(type = "pearson")`, labelled "Std. Pearson resid." |
+| `boot::glm.diag.plots()` | standardised deviance, `dev / (sd·√(1−h))` |
+| `car::qqPlot()` | declines — *"QQ plot for studentized residuals not available for glm"* |
+| `statmod::qresid()` | randomised quantile residuals (what this package uses) |
+| `DHARMa` | simulated residuals, Q-Q against a **uniform** |
+
+On a correctly specified Poisson with 20,000 rows, 87% of them claim-free:
+
+| residual | outside a nominal 5% band | KS test vs N(0,1) |
+|---|---|---|
+| base R, std. Pearson | 8.34% | `p < 2e-16` |
+| `boot`, std. deviance | 1.31% | `p < 2e-16` |
+| quantile residual | 5.10% | `p = 0.86` |
+
+The two classical ones fail in opposite directions — Pearson too heavy in
+the tails, deviance too light — and both reject a model that is exactly
+right, so neither can tell you anything about one that is not. Where the
+fitted mean varies little they also collapse onto visible bands, because
+the response takes only a handful of values.
 
 `plot_glm_qq()` uses the **randomised quantile residual** instead (Dunn &
 Smyth, 1996). For a continuous response,
@@ -1267,8 +1287,7 @@ $$u_i \sim \mathrm{U}\big(F(y_i-1;\hat\mu_i),\,F(y_i;\hat\mu_i)\big),
 \qquad r_i = \Phi^{-1}(u_i)$$
 
 Under a correctly specified model these are **exactly** standard normal,
-discreteness included — 5.1% outside the band and `p = 0.86` on the same
-data. Per family:
+discreteness included, which is what the table above shows. Per family:
 
 | Family | CDF used | Dispersion |
 |---|---|---|
@@ -1898,7 +1917,7 @@ that assumption is precisely what the plot tests, so estimating it would
 hide what is being looked for — and the Pearson estimate for Gamma and
 gaussian. See [reading a Q-Q
 plot](#reading-a-q-q-plot-of-quantile-residuals) for the per-family CDFs
-and the comparison against deviance residuals.
+and what the standard packages plot instead.
 
 **Returns.** A plotly object; `attr(p, "residuals")` holds the residuals
 for every row and `attr(p, "type")` is `"quantile"` or `"deviance"`.
@@ -1909,8 +1928,8 @@ CDF, which ignores the estimated overdispersion, and says so.
 
 **Verification.** Identical to `statmod::qresid()` for Poisson and equal
 to 6e-14 for Gamma; on a correctly specified Poisson the residuals pass a
-KS test against N(0,1) at `p = 0.86` where deviance residuals fail at
-`p < 2e-16`.
+KS test against N(0,1) at `p = 0.86`, where the residuals base R and
+`boot` plot both fail at `p < 2e-16`.
 
 **Cost.** One CDF evaluation per row plus a sort, O(n log n).
 
