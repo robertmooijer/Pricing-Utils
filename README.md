@@ -1154,10 +1154,12 @@ tail bins that look like misfit but are noise.
 ### Why a one-way check cannot see an interaction
 
 This is not a matter of bad luck or too little data — it is structural.
-For a canonical link, the score equations of the GLM force the fitted
-totals to equal the observed totals for **every column of the design
-matrix**. So for a categorical variable that is in the model, the A/E is
-exactly 1.000 at every level, no matter what happens inside the cells:
+The score equations of a GLM weight each observation by
+`(dμ/dη) / V(μ)`, and for a **canonical** link that weight is exactly 1.
+What is left is `Σ x(y − μ) = 0` for every column of the design matrix, so
+for a categorical variable in the model the fitted total equals the
+observed total at every level — the A/E is exactly 1.000, no matter what
+happens inside the cells:
 
 ```
 A/E per REGIO:   Dorp 1.0000   Platteland 1.0000   Rand 1.0000   Stad 1.0000
@@ -1169,6 +1171,45 @@ per predictor will look perfect while whole cells of the portfolio are
 mispriced by tens of percent. That is precisely the blind spot
 [`detect_interactions()`](#detect_interactions) and
 [`plot_residual_heatmap()`](#plot_residual_heatmap) exist to cover.
+
+#### Frequency is exactly blind, severity almost
+
+Poisson with a log link is canonical, so a frequency model is blind by
+identity. **Gamma with a log link is not** — the canonical link for Gamma
+is the inverse — so this argument does not carry over to a severity model
+unchanged. It does not disappear either; it changes what gets pinned.
+
+With a log link on a Gamma, the score weight is `μ/μ² = 1/μ`, so the
+equations reduce to `Σ x·w·(y/μ − 1) = 0`. What is forced to exactly 1 is
+the weighted mean of the **ratio**, not the ratio of the weighted totals.
+Measured on 40,000 rows:
+
+| Model | `Σwy / Σwμ` (the A/E) | `Σw(y/μ) / Σw` |
+|---|---|---|
+| Poisson log (canonical) | **1.0e-14** | 1.3e-02 |
+| Gamma log (used here) | 1.2e-04 | **3.3e-09** |
+| Gamma inverse (canonical) | **2.6e-10** | 1.2e-04 |
+
+Each link pins something exactly; the canonical one happens to pin the
+quantity an A/E plot draws.
+
+So a severity model does leave a residue in the one-way A/E — and it is
+far too small to work with. On the same data:
+
+- with no interaction at all: max `|A/E − 1|` = **0.012%**
+- with a genuine omitted interaction of 35%: **0.259%**
+
+A real effect is only about twenty times the numerical floor, and a
+quarter of a percent is invisible on an axis running in the thousands. So
+the practical conclusion is unchanged for both sides of the tariff: the
+one-way check does not find interactions. It is exact blindness for
+frequency and effective blindness for severity, and the cell-level tools
+are what cover it either way.
+
+There is a second route to the same blindness that has nothing to do with
+the link: a model **saturated** in a variable fits each of its levels
+exactly, so the A/E is 1.000 there whatever the link. Verified with an
+identity-link Poisson on a single factor: max `|A/E − 1|` = 9.9e-14.
 
 Two things to keep in mind when acting on what they find:
 

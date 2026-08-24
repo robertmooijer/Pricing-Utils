@@ -1,10 +1,25 @@
 # Interaction detection -----------------------------------------------------
 #
-# One-way A/E checks cannot reveal a missing interaction. For a canonical
-# link the score equations force the fitted totals to equal the observed
-# totals for every column of the design matrix, so a categorical variable
-# that is in the model has an A/E of exactly 1 at every level - whatever
-# happens inside the cells. The two functions here look at the cells.
+# One-way A/E checks cannot reveal a missing interaction.
+#
+# The score equations weight each observation by (dmu/deta)/V(mu), which is
+# exactly 1 for a canonical link. What remains is sum(x*(y - mu)) = 0 for
+# every column of the design matrix, so a categorical variable in the model
+# has an A/E of exactly 1 at every level - whatever happens inside the
+# cells. Poisson with a log link is canonical, so a frequency model is
+# blind by identity.
+#
+# Gamma with a log link is NOT canonical (the canonical link for Gamma is
+# the inverse), so a severity model is not blind by identity. It is blind
+# in practice. The log link puts the score weight at mu/mu^2 = 1/mu, which
+# pins the weighted mean of the RATIO y/mu to 1 rather than the ratio of
+# the weighted totals: measured on 40,000 rows, sum(w*y/mu)/sum(w) sits at
+# 3e-09 from 1 while the A/E itself sits at 1.2e-04. The residue that
+# leaves in the A/E is far too small to work with - an omitted interaction
+# of 35% moves the one-way A/E by 0.26%, invisible on an axis in the
+# thousands.
+#
+# Either way, the two functions here look at the cells.
 
 # Diverging colour scale for A/E, centred on 1.0: two hues (the house navy
 # for overpriced, red for underpriced) with a neutral grey midpoint. Never
@@ -19,9 +34,12 @@
 #'
 #' Shows the exposure-weighted A/E ratio of a fitted GLM per cell of
 #' `var_x` x `var_y`. This is the check that a one-way plot cannot do: a
-#' missing interaction averages out in the margins (exactly, for a
-#' categorical variable that is in the model) while individual cells can be
-#' badly mispriced.
+#' missing interaction averages out in the margins while individual cells
+#' can be badly mispriced. Exactly so for a frequency model - Poisson with
+#' a log link is canonical, so the fitted total equals the observed total
+#' at every level of a categorical term in the model - and near enough for
+#' a Gamma severity, where an omitted interaction of 35% moves the one-way
+#' A/E by a quarter of a percent.
 #'
 #' Both variables are grouped with the same rule used elsewhere in the
 #' package: categorical as is, a numeric variable with at most `n_bins`

@@ -40,9 +40,12 @@ expected, A/E, exposure, claims, thin flag) is attached as the
 \description{
 Shows the exposure-weighted A/E ratio of a fitted GLM per cell of
 \code{var_x} x \code{var_y}. This is the check that a one-way plot cannot do: a
-missing interaction averages out in the margins (exactly, for a
-categorical variable that is in the model) while individual cells can be
-badly mispriced.
+missing interaction averages out in the margins while individual cells
+can be badly mispriced. Exactly so for a frequency model - Poisson with
+a log link is canonical, so the fitted total equals the observed total
+at every level of a categorical term in the model - and near enough for
+a Gamma severity, where an omitted interaction of 35\% moves the one-way
+A/E by a quarter of a percent.
 }
 \details{
 Both variables are grouped with the same rule used elsewhere in the
