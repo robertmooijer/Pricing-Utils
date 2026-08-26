@@ -151,3 +151,73 @@ test_that("make_plot aggregates raw data internally", {
                          "color", FALSE),
                "Frequency")
 })
+
+test_that("observed points carry error bars that match the theory", {
+  set.seed(61)
+  nn <- 30000
+  dc <- data.frame(R = factor(sample(c("N", "O", "Z"), nn, TRUE)),
+                   LFT = round(runif(nn, 18, 80)),
+                   Exposure = round(runif(nn, .3, 1), 3))
+  dc$AantalClaims <- rpois(nn, dc$Exposure * exp(-2.2 + .3 * (dc$R == "Z")))
+  mc <- glm(AantalClaims ~ R + offset(log(Exposure)), poisson(), dc)
+  tr <- function(p, nm) {
+    b <- plotly::plotly_build(p)
+    for (t in b$x$data) if (identical(t$name, nm)) return(t)
+    NULL
+  }
+
+  o <- tr(plot_glm_predictor(mc, "R"), "Observed")
+  # counts: se = sqrt(phi * sum(V(mu))) / sum(exposure), phi fixed at 1
+  hand <- tapply(seq_len(nn), dc$R, function(i)
+    sqrt(sum(fitted(mc)[i])) / sum(dc$Exposure[i]))
+  expect_equal(as.vector(o$error_y$array) / stats::qnorm(0.975),
+               as.vector(hand[o$x]), tolerance = 1e-10)
+
+  # a weighted Gamma uses the weighted-mean form and an estimated phi
+  dsv <- dc[dc$AantalClaims > 0, ]
+  dsv$Avg <- rgamma(nrow(dsv), 3, scale = 700)
+  msv <- glm(Avg ~ R, Gamma("log"), dsv, weights = AantalClaims)
+  os <- suppressWarnings(tr(plot_glm_predictor(msv, "R"), "Observed"))
+  phi <- sum(residuals(msv, type = "pearson")^2) / msv$df.residual
+  h2 <- tapply(seq_len(nrow(dsv)), dsv$R, function(i)
+    sqrt(phi * sum(dsv$AantalClaims[i] * fitted(msv)[i]^2)) /
+      sum(dsv$AantalClaims[i]))
+  expect_equal(as.vector(os$error_y$array) / stats::qnorm(0.975),
+               as.vector(h2[os$x]), tolerance = 1e-8)
+})
+
+test_that("the ci switches behave", {
+  set.seed(62)
+  nn <- 8000
+  dc <- data.frame(R = factor(sample(c("N", "Z"), nn, TRUE)),
+                   Exposure = round(runif(nn, .3, 1), 3))
+  dc$AantalClaims <- rpois(nn, dc$Exposure * .12)
+  mc <- glm(AantalClaims ~ R + offset(log(Exposure)), poisson(), dc)
+  tr <- function(p) {
+    b <- plotly::plotly_build(p)
+    for (t in b$x$data) if (identical(t$name, "Observed")) return(t)
+    NULL
+  }
+  # plotly leaves a stub error_y of its own, so the array is what counts
+  expect_null(tr(plot_glm_predictor(mc, "R", ci = FALSE))$error_y$array)
+  expect_false(is.null(tr(plot_glm_predictor(mc, "R"))$error_y$array))
+  expect_true(all(tr(plot_glm_predictor(mc, "R", ci_level = 0.99))$error_y$array >
+                  tr(plot_glm_predictor(mc, "R"))$error_y$array))
+  expect_error(plot_glm_predictor(mc, "R", ci_level = 1.5), "between 0 and 1")
+  expect_error(plot_glm_predictor(mc, "R", ci_level = 0), "between 0 and 1")
+})
+
+test_that("binned residuals are drawn as points, not a line", {
+  set.seed(63)
+  nn <- 6000
+  dc <- data.frame(x = runif(nn), Exposure = round(runif(nn, .3, 1), 3))
+  dc$AantalClaims <- rpois(nn, dc$Exposure * exp(-2 + dc$x))
+  mc <- glm(AantalClaims ~ x + offset(log(Exposure)), poisson(), dc)
+  b <- plotly::plotly_build(plot_glm_residuals(mc))
+  mr <- NULL
+  for (t in b$x$data) if (identical(t$name, "Mean residual")) mr <- t
+  # plotly leaves a default line stub on every scatter trace, so the mode
+  # is the switch that decides whether a line is actually drawn
+  expect_identical(mr$mode, "markers")
+  expect_false(grepl("lines", mr$mode, fixed = TRUE))
+})

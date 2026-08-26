@@ -185,6 +185,11 @@ glm_collinearity <- function(model, threshold = 3) {
 #' Systematic patterns outside the band indicate missed structure
 #' (candidate terms/splines).
 #'
+#' The bin means are drawn as points rather than joined into a line. They
+#' are independent draws, and a connecting line invites the eye to read a
+#' trend into what is mostly noise; the band is what says whether a point
+#' means anything.
+#'
 #' @param model A fitted glm object.
 #' @param predictor Optional: bin by this predictor instead of the fitted
 #'   values.
@@ -275,10 +280,12 @@ plot_glm_residuals <- function(model, predictor = NULL, n_bins = 50,
                 fill = "tonexty", fillcolor = "rgba(168,200,224,0.25)",
                 name = "\u00b12\u00b7SE", legendgroup = "band",
                 showlegend = FALSE, hoverinfo = "skip") %>%
+      # Markers, not a line. Bin means are independent draws, and joining
+      # them invites the eye to read a trend into what is mostly noise -
+      # the band is what says whether a point means anything.
       add_trace(data = agg, x = ~x_plot, y = ~mean_r,
-                type = "scatter", mode = "lines+markers",
+                type = "scatter", mode = "markers",
                 name = "Mean residual",
-                line   = list(color = ta_blue, width = 1.6),
                 marker = list(color = ta_blue, size = 6),
                 text = ~paste0("n = ", n), hovertemplate = ht_mean)
   } else {

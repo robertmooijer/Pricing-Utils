@@ -30,6 +30,35 @@
 #' @param title,ylab,xlab Optional labels.
 #' @param metric_fmt Number of decimals in the tooltip (default 4).
 #' @param bin_type `"quantile"` (default) or `"width"`.
+#' @param ci Draw error bars on the observed points (default `TRUE`). The
+#'   bars answer the question the plot is really asking: is the gap between
+#'   observed and predicted bigger than the noise this bin carries? A bin
+#'   whose bar comfortably spans the predicted line is not evidence of
+#'   anything, however far apart the two markers look.
+#' @param ci_level Confidence level for those bars (default `0.95`).
+#'
+#'   The interval is on the **observed** point only. The predicted line is
+#'   the model, and its parameter uncertainty is a different and usually
+#'   much smaller quantity. The standard error comes from the fitted
+#'   family's own variance function, scaled by the Pearson dispersion for
+#'   families that estimate one: for counts the bin total has variance
+#'   `phi * sum(V(mu))`, so the rate divides that by the exposure, and for
+#'   a weighted mean it is the usual `phi * sum(w V(mu)) / (sum w)^2`.
+#'   Poisson and binomial hold the dispersion at 1, since that is the
+#'   assumption being examined.
+#'
+#'   Measured coverage on a correctly specified Poisson is 0.96 for a
+#'   binned continuous predictor and 0.98 for a categorical one outside
+#'   the model, so the bars are honest to mildly conservative.
+#'
+#'   One case where they cannot be read as a test: for a **categorical
+#'   term that is in the model** under a canonical link, the score
+#'   equations force observed to equal predicted at every level exactly,
+#'   so the bar contains the predicted point by construction and coverage
+#'   is 1 by identity rather than by fit. There the bar length is still
+#'   worth reading - it says how much evidence the level carries - but the
+#'   absence of a gap is arithmetic, not agreement. See
+#'   [detect_interactions()] for what does look inside those levels.
 #' @param y_range Optional `c(lo, hi)` to fix the primary y-axis range,
 #'   e.g. to make multiple `plot_glm_predictor()` calls for different
 #'   predictors visually comparable. Left `NULL` by default, in which
@@ -48,11 +77,16 @@ plot_glm_predictor <- function(model, predictor,
                                title = NULL, ylab = NULL, xlab = NULL,
                                metric_fmt = 4,
                                bin_type = c("quantile", "width"),
+                               ci = TRUE, ci_level = 0.95,
                                y_range = NULL) {
 
   bin_type <- match.arg(bin_type)
   if (!inherits(model, "glm")) stop("'model' must be a glm object.")
   if (n_bins < 2) stop("plot_glm_predictor: 'n_bins' must be at least 2.")
+  if (!is.numeric(ci_level) || length(ci_level) != 1 ||
+      ci_level <= 0 || ci_level >= 1)
+    stop("plot_glm_predictor: 'ci_level' must be a single value strictly ",
+         "between 0 and 1.", call. = FALSE)
   y_range <- .check_range(y_range, "plot_glm_predictor")
 
   tr            <- .glm_training_data(model, "plot_glm_predictor")
@@ -120,6 +154,14 @@ plot_glm_predictor <- function(model, predictor,
     predicted = predict(model, type = "response"),
     weight    = w
   )
+  # Sampling variance of the response, from the family's own variance
+  # function, so the error bars follow whatever family was fitted rather
+  # than assume Poisson. Multiplied by the prior weight because a GLM
+  # states Var(y_i) = phi * V(mu_i) / w_i.
+  df$var_unit <- fam$variance(df$predicted)
+  df$prior_w  <- tr$weights
+  phi <- if (fam$family %in% c("poisson", "binomial")) 1 else
+    sum(residuals(model, type = "pearson")^2) / model$df.residual
 
   # Grouping
   if (is.numeric(df$x_var)) {
@@ -169,9 +211,17 @@ plot_glm_predictor <- function(model, predictor,
       avg_observed  = if (use_rate) sum(observed)  / sum(weight) else weighted.mean(observed,  weight),
       avg_predicted = if (use_rate) sum(predicted) / sum(weight) else weighted.mean(predicted, weight),
       weight_sum    = sum(weight),
+      # Standard error of the OBSERVED point, which is the one that
+      # carries sampling noise; the predicted line is the model. Counts:
+      # the bin total has variance phi * sum(V(mu_i)), so the rate divides
+      # that by the exposure. Weighted means: Var(ybar) =
+      # phi * sum(w_i V(mu_i)) / (sum w_i)^2, the usual weighted-mean form.
+      se_observed   = if (use_rate) sqrt(sum(var_unit)) / sum(weight)
+                      else sqrt(sum(prior_w * var_unit)) / sum(prior_w),
       n             = n(),
       .groups       = "drop"
-    )
+    ) %>%
+    mutate(se_observed = sqrt(phi) * se_observed)
 
   if (x_is_numeric) {
     agg <- agg %>% arrange(x_plot)
@@ -206,9 +256,16 @@ plot_glm_predictor <- function(model, predictor,
     )
   }
 
+  # Error bars on the observed points, so a gap between the two lines can
+  # be read against the noise the bin actually carries. Thin bins get long
+  # bars, which is the honest picture: they were never evidence.
+  err_cfg <- if (isTRUE(ci)) list(
+    type = "data", array = agg$se_observed * stats::qnorm(1 - (1 - ci_level) / 2),
+    color = color, thickness = 1.2, width = 3) else NULL
+
   p <- p %>% add_trace(
     y = ~avg_observed, name = "Observed", yaxis = "y",
-    type = "scatter", mode = scatter_mode,
+    type = "scatter", mode = scatter_mode, error_y = err_cfg,
     line   = list(color = color, width = 2.2),
     marker = list(color = color, size = 7),
     hovertemplate = paste0("<b>", xlab, ":</b> %{x}",

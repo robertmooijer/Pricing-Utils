@@ -38,3 +38,9 @@ roughly 95 percent of the bin means should fall inside the band.
 Systematic patterns outside the band indicate missed structure
 (candidate terms/splines).
 }
+\details{
+The bin means are drawn as points rather than joined into a line. They
+are independent draws, and a connecting line invites the eye to read a
+trend into what is mostly noise; the band is what says whether a point
+means anything.
+}

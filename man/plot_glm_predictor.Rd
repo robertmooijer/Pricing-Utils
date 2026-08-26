@@ -17,6 +17,8 @@ plot_glm_predictor(
   xlab = NULL,
   metric_fmt = 4,
   bin_type = c("quantile", "width"),
+  ci = TRUE,
+  ci_level = 0.95,
   y_range = NULL
 )
 }
@@ -41,6 +43,37 @@ shown unbinned, one point per value.}
 \item{metric_fmt}{Number of decimals in the tooltip (default 4).}
 
 \item{bin_type}{\code{"quantile"} (default) or \code{"width"}.}
+
+\item{ci}{Draw error bars on the observed points (default \code{TRUE}). The
+bars answer the question the plot is really asking: is the gap between
+observed and predicted bigger than the noise this bin carries? A bin
+whose bar comfortably spans the predicted line is not evidence of
+anything, however far apart the two markers look.}
+
+\item{ci_level}{Confidence level for those bars (default \code{0.95}).
+
+The interval is on the \strong{observed} point only. The predicted line is
+the model, and its parameter uncertainty is a different and usually
+much smaller quantity. The standard error comes from the fitted
+family's own variance function, scaled by the Pearson dispersion for
+families that estimate one: for counts the bin total has variance
+\code{phi * sum(V(mu))}, so the rate divides that by the exposure, and for
+a weighted mean it is the usual \verb{phi * sum(w V(mu)) / (sum w)^2}.
+Poisson and binomial hold the dispersion at 1, since that is the
+assumption being examined.
+
+Measured coverage on a correctly specified Poisson is 0.96 for a
+binned continuous predictor and 0.98 for a categorical one outside
+the model, so the bars are honest to mildly conservative.
+
+One case where they cannot be read as a test: for a \strong{categorical
+term that is in the model} under a canonical link, the score
+equations force observed to equal predicted at every level exactly,
+so the bar contains the predicted point by construction and coverage
+is 1 by identity rather than by fit. There the bar length is still
+worth reading - it says how much evidence the level carries - but the
+absence of a gap is arithmetic, not agreement. See
+\code{\link[=detect_interactions]{detect_interactions()}} for what does look inside those levels.}
 
 \item{y_range}{Optional \code{c(lo, hi)} to fix the primary y-axis range,
 e.g. to make multiple \code{plot_glm_predictor()} calls for different

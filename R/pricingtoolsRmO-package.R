@@ -38,6 +38,7 @@ utils::globalVariables(c(
   "pn", "po", "pred", "act", "ratio", "ExposureShare", "Contribution",
   "MeanChangePct",
   "observed", "predicted", "weight", "weight_sum",
+  "var_unit", "prior_w", "se_observed",
   "avg_observed", "avg_predicted", "mean_r", "band",
   "E", "C", "w", "ch"
 ))

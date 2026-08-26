@@ -348,7 +348,7 @@ plot_glm_predictor(model, predictor, n_bins = 150,
                    color = ta_year_palette(1), color_pred = ta_gold,
                    title = NULL, ylab = NULL, xlab = NULL,
                    metric_fmt = 4, bin_type = c("quantile", "width"),
-                   y_range = NULL)
+                   ci = TRUE, ci_level = 0.95, y_range = NULL)
 ```
 
 Mode is detected automatically:
@@ -361,6 +361,32 @@ Mode is detected automatically:
   claim-count-weighted for severity).
 - `weight_var` overrides the weight column explicitly (must exist in
   `model$data`; an unknown name is an error, not silently ignored).
+
+**Error bars.** The observed points carry a 95% interval by default, which
+turns the plot from "these two lines differ" into "these two lines differ
+by more than the noise here". A bin whose bar comfortably spans the
+predicted line is not evidence of anything, however far apart the two
+markers look, and a bar that is long simply says the bin is thin. Switch
+them off with `ci = FALSE` or widen them with `ci_level`.
+
+The interval is on the **observed** point only. The predicted line is the
+model; its parameter uncertainty is a different and usually much smaller
+quantity. The standard error comes from the fitted family's own variance
+function, scaled by the Pearson dispersion where the family estimates one:
+counts use `sqrt(φ·Σ V(μ)) / Σexposure`, weighted means the usual
+`sqrt(φ·Σ w·V(μ)) / Σw`. Measured coverage on a correctly specified
+Poisson is 0.96 for a binned continuous predictor and 0.98 for a
+categorical one outside the model.
+
+One case where the bars cannot be read as a test: for a **categorical term
+that is in the model** under a canonical link, observed equals predicted at
+every level by construction, so the bar always contains the predicted point
+— coverage is 1 by identity, not by fit. The bar length still tells you how
+much evidence the level carries, but the absence of a gap there is
+arithmetic. That is the blind spot
+[`detect_interactions()`](#detect_interactions) exists to cover; see [why a
+one-way check cannot see an
+interaction](#why-a-one-way-check-cannot-see-an-interaction).
 
 **Binning.** A numeric predictor with at most `n_bins` distinct values is
 not binned at all: every value gets its own point, on its exact position.
@@ -495,6 +521,11 @@ roughly 95% of the bin means should fall inside the band; a systematic
 pattern outside it (e.g. a curve over a predictor) signals missed structure,
 a candidate spline, banding or interaction. Categorical predictors get error
 bars per level instead of a ribbon.
+
+The bin means are drawn as **points, not joined into a line**. They are
+independent draws, and a connecting line invites the eye to trace a trend
+through what is mostly noise; the band is what says whether a point means
+anything.
 
 **Returns** a plotly object.
 
