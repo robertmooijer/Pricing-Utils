@@ -803,19 +803,29 @@ Three things to read carefully:
   trusted. Fix the main effects, then run again.
 - **Rank on `PermDeviance`, not `Gain`.** `PermDeviance` is the increase
   in out-of-sample deviance when the feature is shuffled with the baseline
-  held fixed, so it is the *incremental* contribution; at or below zero
-  means no usable signal. `Gain` is biased towards continuous and
-  high-cardinality features, in the run above it gives pure noise
-  (`RUIS`) a 13.5% share while the permutation test correctly puts it at
-  −3.57.
+  held fixed, so it is the *incremental* contribution. `Gain` is biased
+  towards continuous and high-cardinality features; in the run above it
+  gives pure noise (`RUIS`) a 13.5% share while the permutation test
+  correctly puts it at −3.57.
+- **It is a ranking, not a test.** Zero is not a threshold. The figure is
+  a difference between two deviances on one random split, so it carries
+  sampling noise, and its scale depends on how large that split is — a
+  value of 5 means nothing on its own. Measured on a 150,000-row book over
+  three seeds, pure noise columns ranged from −3.8 to +2.3 while a genuine
+  but weak predictor ranged from −1.9 to +2.0. The strong features were
+  never in doubt (30 to 48); the marginal ones were not separable at all.
+- **Two cheap ways to see where the noise band sits.** Add a column you
+  know is noise, `data$CONTROL <- rnorm(nrow(data))`, and read every other
+  feature against where it lands. And re-run with two or three `seed`
+  values: anything whose sign flips between runs is inside the band.
 - **Near-duplicates split their importance.** `GEWICHT` and
   `GEWICHT_PROXY` each get roughly half, and which one comes out on top is
   arbitrary. Pairs above `cor_threshold` are listed in `$correlated` with
   a warning.
 
 Also returns `$interactions` (SHAP ranking), `$stats` and `$plot`. The plot
-ranks candidates by incremental value, muting everything at or below zero,
-the columns that carry no signal:
+ranks candidates by incremental value and mutes everything at or below
+zero — a useful visual cue, not a verdict:
 
 ![Feature screening](man/figures/README-screen-features.png)
 
@@ -2598,9 +2608,16 @@ still improves the fit, main effects are missing and the interaction ranking
 cannot be trusted, fix those first and run again. Rank on `PermDeviance`,
 never on `Gain`: `Gain` is biased towards continuous and high-cardinality
 features and in testing gave a pure-noise column a 13.5% share while the
-permutation test correctly placed it below zero. A `PermDeviance` at or
-below zero means no usable signal. Near-duplicates split their importance,
-so which of a correlated pair comes out on top is arbitrary.
+permutation test correctly placed it below zero.
+
+`PermDeviance` is a **ranking, not a test**: zero is not a threshold, the
+figure carries sampling noise, and its scale depends on the size of the
+test split. Over three seeds on a 150,000-row book, noise columns ran from
+−3.8 to +2.3 and a real but weak predictor from −1.9 to +2.0, while the
+strong features stayed between 30 and 48. Anything near the bottom of the
+list should be re-run with another `seed`, or read against a deliberate
+`rnorm()` control column. Near-duplicates split their importance, so which
+of a correlated pair comes out on top is arbitrary.
 
 **Sensitivity.** A booster is *less* sensitive to a two-way interaction
 between known rating factors than `detect_interactions()`: on identical data

@@ -66,11 +66,25 @@
 #'
 #' `features` is sorted by `PermDeviance`: the increase in out-of-sample
 #' deviance when that feature is shuffled, with the baseline held fixed, so
-#' it measures the feature's *incremental* contribution. A value at or
-#' below zero means no usable signal. `Gain` is reported alongside but is
-#' unreliable on its own: it is biased towards continuous and
-#' high-cardinality features, which routinely gives pure noise a
-#' respectable-looking share.
+#' it measures the feature's *incremental* contribution.
+#'
+#' **Read it as a ranking, not as a test.** Zero is not a threshold. The
+#' figure is a difference between two deviances on one random split, so it
+#' carries real sampling noise, and its scale depends on how large that
+#' split is - a value of 5 means nothing on its own. Measured on a
+#' 150,000-row book over three seeds, pure noise columns ranged from -3.8
+#' to +2.3 while a genuine but weak predictor ranged from -1.9 to +2.0.
+#' The strong features were never in doubt (30 to 48); the marginal ones
+#' were not separable at all.
+#'
+#' Two cheap ways to see where the noise band sits. Add a column you know
+#' is noise - `data$CONTROL <- rnorm(nrow(data))` - and read every other
+#' feature against where it lands. And re-run with two or three `seed`
+#' values: anything whose sign flips between runs is inside the band.
+#'
+#' `Gain` is reported alongside but is unreliable on its own: it is biased
+#' towards continuous and high-cardinality features, which routinely gives
+#' pure noise a respectable-looking share.
 #'
 #' Correlated candidates split their importance between them, so a pair of
 #' near-duplicates can both look mediocre. Pairs above `cor_threshold` are
@@ -355,7 +369,10 @@ screen_features <- function(model, features = NULL,
   gain_note <- paste0(
     "Rank on PermDeviance, not Gain: Gain is biased towards continuous and ",
     "high-cardinality features and regularly gives pure noise a sizeable ",
-    "share. PermDeviance at or below 0 means no usable signal.")
+    "share. PermDeviance is a ranking, not a test: zero is not a threshold ",
+    "and the figure carries sampling noise, so re-run with another seed, or ",
+    "add a column you know is noise, before trusting anything near the ",
+    "bottom of the list.")
 
   # Near-duplicate candidates split their importance ----------------------
   num_f <- features[vapply(features, function(f) is.numeric(d[[f]]),

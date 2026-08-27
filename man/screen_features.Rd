@@ -91,11 +91,25 @@ then run again.
 
 \code{features} is sorted by \code{PermDeviance}: the increase in out-of-sample
 deviance when that feature is shuffled, with the baseline held fixed, so
-it measures the feature's \emph{incremental} contribution. A value at or
-below zero means no usable signal. \code{Gain} is reported alongside but is
-unreliable on its own: it is biased towards continuous and
-high-cardinality features, which routinely gives pure noise a
-respectable-looking share.
+it measures the feature's \emph{incremental} contribution.
+
+\strong{Read it as a ranking, not as a test.} Zero is not a threshold. The
+figure is a difference between two deviances on one random split, so it
+carries real sampling noise, and its scale depends on how large that
+split is - a value of 5 means nothing on its own. Measured on a
+150,000-row book over three seeds, pure noise columns ranged from -3.8
+to +2.3 while a genuine but weak predictor ranged from -1.9 to +2.0.
+The strong features were never in doubt (30 to 48); the marginal ones
+were not separable at all.
+
+Two cheap ways to see where the noise band sits. Add a column you know
+is noise - \code{data$CONTROL <- rnorm(nrow(data))} - and read every other
+feature against where it lands. And re-run with two or three \code{seed}
+values: anything whose sign flips between runs is inside the band.
+
+\code{Gain} is reported alongside but is unreliable on its own: it is biased
+towards continuous and high-cardinality features, which routinely gives
+pure noise a respectable-looking share.
 
 Correlated candidates split their importance between them, so a pair of
 near-duplicates can both look mediocre. Pairs above \code{cor_threshold} are
