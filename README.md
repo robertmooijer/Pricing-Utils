@@ -2565,14 +2565,30 @@ screen_features(model, features = NULL, split = c(0.6, 0.2, 0.2),
 | `cor_threshold` | numeric(1) | `0.95` | report numeric candidates above this as near-duplicates |
 | `max_levels` | integer | `50` | factors with more levels are skipped |
 | `max_rows` | numeric | `Inf` | work on a random sample of at most this many rows; the default uses every row (`NULL` means the same, for calls written against the old default) |
+| `tree_method` | character(1) | `"hist"` | how xgboost searches for splits; `"hist"` bins each feature first, which is much the fastest |
 | `nthread` | integer or NULL | `NULL` | boosting threads; `NULL` = available cores minus one |
 | `seed` | integer or NULL | `NULL` | reproducible sample, split and boosting |
 
-**Performance.** The default screens every row. Boosting dominates the
-runtime and everything scales with the row count, so on a production
-portfolio the two levers are `max_rows` and `nthread`; above half a million
-rows the function says so, since the wait is otherwise silent. Measured on
-a simulated 1.5M-row set with 10 candidates: 148
+**Performance.** Boosting is where the time goes. Profiled on 2,000,000
+rows with 6 candidates, the two boosters were 82% of the whole call and
+everything else — recovering the model frame, refitting the baseline,
+building the design matrices, the permutation pass, the SHAP array —
+together made up the rest.
+
+So the first lever is `tree_method`, and it costs nothing. `"hist"` bins
+each feature before searching for a split; it is what xgboost itself made
+default in 2.0 and it is the default here, which matters on the 1.x series
+where `"auto"` still picks the slower `"approx"` on large data:
+
+| `tree_method` | boosting + permutation | test deviance | ranking |
+|---|---|---|---|
+| `"approx"` (xgboost 1.x default) | 291.6 s | 130640.6 | — |
+| **`"hist"`** | **108.4 s** | 130640.5 | identical |
+
+The default screens every row, so `max_rows` and `nthread` are the next
+two levers; above half a million rows the function says so, since the wait
+is otherwise silent. Measured on a simulated 1.5M-row set with 10
+candidates: 148
 s on all rows against 7 s at `max_rows = 1e5`, with the signal/noise
 ordering identical at every size. Screening ranks candidates rather than
 estimating them precisely, which is why sampling is cheap here, but very

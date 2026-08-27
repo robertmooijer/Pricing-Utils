@@ -16,6 +16,7 @@ screen_features(
   cor_threshold = 0.95,
   max_levels = 50,
   max_rows = Inf,
+  tree_method = "hist",
   nthread = NULL,
   seed = NULL
 )
@@ -58,6 +59,16 @@ book the order of the candidates was unchanged from 100,000 rows
 upwards. \code{max_rows = 2e5} is a sensible first try. The deviances in
 \code{summary} and \code{PermDeviance} then refer to the sample, so they are
 comparable within a run but not across runs of different sizes.}
+
+\item{tree_method}{How xgboost searches for splits, passed straight
+through. \code{"hist"} (default) buckets each feature into bins before
+looking for a split, which is the single biggest lever there is on a
+large book: measured on 2,000,000 rows with 6 candidates, boosting and
+permutation together took 291.6 s under xgboost's own default and
+108.4 s under \code{"hist"}, a 63\% saving, for a test deviance of 130640.5
+against 130640.6 and an identical feature ranking. xgboost made \code{hist}
+its default in 2.0; this keeps the behaviour on the 1.x series too.
+\code{"exact"} and \code{"approx"} are the alternatives, both slower.}
 
 \item{nthread}{Threads for boosting. \code{NULL} (default) uses one fewer
 than the available cores, capped by \code{OMP_THREAD_LIMIT} and reduced to

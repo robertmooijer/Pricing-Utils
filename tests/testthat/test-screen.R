@@ -179,3 +179,28 @@ test_that("a single candidate does not lose the run to xgb.importance", {
   expect_false(is.na(r$features$PermDeviance))     # the useful column survives
   expect_s3_class(r$plot, "plotly")
 })
+
+test_that("tree_method is hist by default and passed through", {
+  # xgboost 1.x defaults to approx on large data; hist is the same algorithm
+  # xgboost itself made default in 2.0, and it is much faster
+  expect_identical(eval(formals(screen_features)$tree_method), "hist")
+
+  set.seed(83)
+  nn <- 4000
+  dt <- data.frame(x = runif(nn), z = runif(nn),
+                   Exposure = round(runif(nn, .3, 1), 3))
+  dt$AantalClaims <- rpois(nn, dt$Exposure * exp(-2 + 1.5 * dt$x))
+  mt <- glm(AantalClaims ~ 1 + offset(log(Exposure)), poisson(), dt)
+  run <- function(...) suppressWarnings(suppressMessages(
+    screen_features(mt, features = c("x", "z"), n_shap = 0, nrounds = 60,
+                    nthread = 2, seed = 5, ...)))
+
+  r_hist  <- run()
+  r_exact <- run(tree_method = "exact")
+  # the real signal wins under either method
+  expect_identical(r_hist$features$Feature[1], "x")
+  expect_identical(r_exact$features$Feature[1], "x")
+  expect_gt(r_hist$features$PermDeviance[1], 0)
+
+  expect_error(run(tree_method = "onzin"))
+})
