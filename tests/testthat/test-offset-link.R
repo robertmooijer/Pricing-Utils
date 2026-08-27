@@ -196,3 +196,88 @@ test_that("an offset that cannot be evaluated per row is refused", {
   short$off <- log(dol$Exposure)[1:50]
   expect_equal(length(.offset_value(m, short)), 50L)
 })
+
+test_that("a second offset does not end up on the exposure axis", {
+  # A known relativity carried as an offset - a bonus-malus scale - makes
+  # exp(offset) equal to Exposure * BM. Dividing both series by that is
+  # still like-for-like, but the axis then reads "per BM-adjusted
+  # policy-year". Both series divide by the exposure itself instead, which
+  # leaves the A/E untouched and the axis readable.
+  set.seed(71)
+  nb <- 15000
+  db <- data.frame(R = factor(sample(c("N", "O", "Z"), nb, TRUE)),
+                   L = round(runif(nb, 18, 80)),
+                   Exposure = round(runif(nb, .25, 1), 3))
+  db$BM <- ifelse(db$L < 30, 1.3, ifelse(db$L > 60, .6, .9))
+  db$AantalClaims <- rpois(nb, db$Exposure * db$BM *
+                             exp(-2.2 + .012 * db$L + .3 * (db$R == "Z")))
+  db$SCHADELAST <- 0
+  mb <- glm(AantalClaims ~ R + L + offset(log(Exposure)) + offset(log(BM)),
+            poisson(), db)
+  tr <- function(p, nm) {
+    b <- plotly::plotly_build(p)
+    for (t in b$x$data) if (identical(t$name, nm)) return(t)
+    NULL
+  }
+  expect_setequal(.offset_vars(mb), c("Exposure", "BM"))
+  expect_true(.offset_is_log(mb))
+
+  p <- plot_glm_predictor(mb, "R")
+  bar <- tr(p, "Exposure"); obs <- tr(p, "Observed"); pre <- tr(p, "Predicted")
+  expect_equal(as.vector(bar$y),
+               as.vector(tapply(db$Exposure, db$R, sum)[bar$x]),
+               tolerance = 1e-8)
+  expect_equal(as.vector(obs$y),
+               as.vector((tapply(db$AantalClaims, db$R, sum) /
+                          tapply(db$Exposure, db$R, sum))[obs$x]),
+               tolerance = 1e-8)
+  # and the comparison the plot exists for is unaffected
+  expect_equal(as.vector(obs$y) / as.vector(pre$y), rep(1, length(obs$y)),
+               tolerance = 1e-8)
+
+  # the PDP average follows the same column as its own observed line
+  pd <- tr(make_pdp(mb, db, "R", metric = "Frequency"), "PDP (model)")
+  hand <- function(wt) vapply(levels(db$R), function(lv) {
+    z <- db; z$R <- factor(lv, levels(db$R))
+    weighted.mean(.predict_no_offset(mb, z), wt) }, numeric(1))
+  expect_equal(as.vector(pd$y),
+               as.vector(hand(db$Exposure)[as.character(pd$x)]),
+               tolerance = 1e-8)
+  # the two weightings really do differ here, so that was a live choice
+  expect_false(isTRUE(all.equal(hand(db$Exposure),
+                                hand(db$Exposure * db$BM))))
+
+  # the premium chain still reconstructs, BM applied on top
+  tb <- suppressWarnings(make_rating_table(mb, NULL, data = db))
+  s <- tb[tb$Variable == "R" & is.na(tb$Group), ]
+  sl <- tb[tb$Variable == "L" & is.na(tb$Group), ]
+  nd <- data.frame(R = factor("Z", levels(db$R)), L = sl$LevelNum[5],
+                   Exposure = 0.5, BM = 0.8)
+  chain <- attr(tb, "intercept_frequency") *
+           s$Factor_Frequency[match("Z", s$Level)] *
+           sl$Factor_Frequency[5] * 0.8 * 0.5
+  expect_equal(chain, as.numeric(predict(mb, nd, type = "response")),
+               tolerance = 1e-10)
+})
+
+test_that("the exposure column falls back and can be named", {
+  set.seed(72)
+  nb <- 4000
+  db <- data.frame(R = factor(sample(c("N", "Z"), nb, TRUE)),
+                   Ex = round(runif(nb, .3, 1), 3))
+  db$AantalClaims <- rpois(nb, db$Ex * .15)
+  db$SCHADELAST <- 0
+  mb <- glm(AantalClaims ~ R + offset(log(Ex)), poisson(), db)
+  tr <- function(p) {
+    b <- plotly::plotly_build(p)
+    for (t in b$x$data) if (identical(t$name, "Exposure")) return(t)
+    NULL
+  }
+  # no column called "Exposure": exp(offset) still recovers it
+  expect_equal(as.vector(tr(suppressWarnings(plot_glm_predictor(mb, "R")))$y),
+               as.vector(tapply(db$Ex, db$R, sum)), tolerance = 1e-8)
+  # naming it is exact
+  expect_equal(as.vector(tr(suppressWarnings(
+                 plot_glm_predictor(mb, "R", exposure_col = "Ex")))$y),
+               as.vector(tapply(db$Ex, db$R, sum)), tolerance = 1e-12)
+})

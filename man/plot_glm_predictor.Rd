@@ -17,6 +17,7 @@ plot_glm_predictor(
   xlab = NULL,
   metric_fmt = 4,
   bin_type = c("quantile", "width"),
+  exposure_col = "Exposure",
   ci = TRUE,
   ci_level = 0.95,
   y_range = NULL
@@ -32,7 +33,8 @@ plot_glm_predictor(
 shown unbinned, one point per value.}
 
 \item{weight_var}{Optional: weight/exposure column in \code{model$data}
-(override; an unknown name is an error).}
+(override; an unknown name is an error). Takes precedence over
+\code{exposure_col}.}
 
 \item{weight_label}{Optional: axis title for the bars.}
 
@@ -43,6 +45,19 @@ shown unbinned, one point per value.}
 \item{metric_fmt}{Number of decimals in the tooltip (default 4).}
 
 \item{bin_type}{\code{"quantile"} (default) or \code{"width"}.}
+
+\item{exposure_col}{Exposure column in the model's training data
+(default \code{"Exposure"}), used as the denominator for a count model and
+as the height of the volume bars.
+
+It matters when a model carries \strong{more than one offset}: a known
+bonus-malus scale alongside the exposure, say. \code{exp(offset)} is then
+\code{Exposure * BM}, and dividing by it would put the axis in claims per
+BM-adjusted policy-year, which is not a quantity anyone reads off a
+chart. Dividing both series by the exposure itself leaves the A/E
+untouched and puts the axis back in claims per policy-year. With a
+single \code{offset(log(Exposure))} the two are the same number. When the
+column is absent the function falls back to \code{exp(offset)}.}
 
 \item{ci}{Draw error bars on the observed points (default \code{TRUE}). The
 bars answer the question the plot is really asking: is the gap between

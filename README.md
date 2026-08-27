@@ -348,6 +348,7 @@ plot_glm_predictor(model, predictor, n_bins = 150,
                    color = ta_year_palette(1), color_pred = ta_gold,
                    title = NULL, ylab = NULL, xlab = NULL,
                    metric_fmt = 4, bin_type = c("quantile", "width"),
+                   exposure_col = "Exposure",
                    ci = TRUE, ci_level = 0.95, y_range = NULL)
 ```
 
@@ -361,6 +362,33 @@ Mode is detected automatically:
   claim-count-weighted for severity).
 - `weight_var` overrides the weight column explicitly (must exist in
   `model$data`; an unknown name is an error, not silently ignored).
+
+**More than one offset.** A model may carry a second, known relativity as
+an offset next to the exposure — a bonus-malus scale that is given rather
+than estimated:
+
+```r
+glm(AantalClaims ~ REGIO + offset(log(Exposure)) + offset(log(BM)), ...)
+```
+
+`exp(offset)` is then `Exposure × BM`, and dividing by it would put the
+axis in claims per *BM-adjusted* policy-year, which is not a quantity
+anyone reads off a chart. Both series are divided by `exposure_col`
+instead, so the axis stays in claims per policy-year and the bars show
+real exposure. The A/E is untouched by the choice, because both sides
+divide by the same thing. `make_pdp()` weights its average by the same
+column, so the two halves of that chart agree. With a single
+`offset(log(Exposure))` nothing changes: the two are the same number.
+
+The rating table handles the second offset the way you would want:
+`.model_rate()` removes **both**, so the intercept and factors are the
+base tariff *before* BM, and the premium chain becomes
+
+```
+premie = intercept × Π factoren × BM × Exposure
+```
+
+verified to reconstruct the model prediction exactly.
 
 **Error bars.** The observed points carry a 95% interval by default, which
 turns the plot from "these two lines differ" into "these two lines differ

@@ -23,8 +23,21 @@
 #' @param n_bins Maximum number of points for a numeric predictor
 #'   (default 150). Predictors with at most this many distinct values are
 #'   shown unbinned, one point per value.
+#' @param exposure_col Exposure column in the model's training data
+#'   (default `"Exposure"`), used as the denominator for a count model and
+#'   as the height of the volume bars.
+#'
+#'   It matters when a model carries **more than one offset**: a known
+#'   bonus-malus scale alongside the exposure, say. `exp(offset)` is then
+#'   `Exposure * BM`, and dividing by it would put the axis in claims per
+#'   BM-adjusted policy-year, which is not a quantity anyone reads off a
+#'   chart. Dividing both series by the exposure itself leaves the A/E
+#'   untouched and puts the axis back in claims per policy-year. With a
+#'   single `offset(log(Exposure))` the two are the same number. When the
+#'   column is absent the function falls back to `exp(offset)`.
 #' @param weight_var Optional: weight/exposure column in `model$data`
-#'   (override; an unknown name is an error).
+#'   (override; an unknown name is an error). Takes precedence over
+#'   `exposure_col`.
 #' @param weight_label Optional: axis title for the bars.
 #' @param color,color_pred Colours for the observed and predicted lines.
 #' @param title,ylab,xlab Optional labels.
@@ -77,6 +90,7 @@ plot_glm_predictor <- function(model, predictor,
                                title = NULL, ylab = NULL, xlab = NULL,
                                metric_fmt = 4,
                                bin_type = c("quantile", "width"),
+                               exposure_col = "Exposure",
                                ci = TRUE, ci_level = 0.95,
                                y_range = NULL) {
 
@@ -120,7 +134,19 @@ plot_glm_predictor <- function(model, predictor,
   # which is not a volume. Both conditions are read off the model.
   off_is_log <- isTRUE(.offset_is_log(model))
   if (has_offset && identical(fam$link, "log") && off_is_log) {
-    w        <- exp(tr$offset)           # offset(log(Exposure)) -> Exposure
+    # Prefer the exposure column itself over exp(offset). With one offset
+    # the two are the same number, but a model may carry a second known
+    # relativity as an offset - a bonus-malus scale, say - and then
+    # exp(offset) is Exposure x BM. Dividing both series by that is still
+    # a like-for-like comparison, but the axis then reads "per BM-adjusted
+    # policy-year", which is not a quantity anyone wants to read off a
+    # chart. Dividing both by the real exposure leaves the A/E identical
+    # and puts the axis back in claims per policy-year.
+    if (!is.null(tr$data) && exposure_col %in% names(tr$data)) {
+      w <- as.numeric(tr$data[[exposure_col]])
+    } else {
+      w <- exp(tr$offset)                # offset(log(Exposure)) -> Exposure
+    }
     use_rate <- TRUE                     # response & predict are COUNTS -> /exposure
     w_title  <- "Exposure"
   } else {

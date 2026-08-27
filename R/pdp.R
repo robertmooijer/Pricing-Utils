@@ -113,7 +113,14 @@ make_pdp <- function(model,
         warning("make_pdp: the model's offset is not a logarithm, so ",
                 "exp(offset) is not an exposure and the weighting is ",
                 "unreliable.", call. = FALSE)
-      exp(tr$offset)
+      # The observed line and the bars are already built from
+      # `exposure_col`, so the PDP average is weighted by the same column
+      # rather than by exp(offset). The two differ once a model carries a
+      # second offset, a known bonus-malus scale for instance, and
+      # weighting the two halves of one chart differently is not something
+      # a reader can be expected to notice.
+      if (exposure_col %in% names(train_df))
+        as.numeric(train_df[[exposure_col]]) else exp(tr$offset)
     } else if (!all(tr$weights == 1)) {
       tr$weights                      # rate model with weights = exposure
     } else {
