@@ -62,7 +62,11 @@
 #' @return A data.frame with one row per level/grid point per variable
 #'   (columns `Variable`, `Type`, `Level`, `LevelNum`, `Group`, `IsBase`,
 #'   `Exposure`, `ClaimCount`, `Factor_*`, `Uplift_*`, `IsThin`, `XVar`,
-#'   `GroupVar`) and attributes `intercept_frequency`,
+#'   `GroupVar`). The three `Uplift_*` columns are present **only when the
+#'   model contains at least one interaction term**; without one they would
+#'   be `NA` in every row, so they are dropped. `Group` and `GroupVar` are
+#'   always there, because `is.na(Group)` is how a main-effect row is told
+#'   from an interaction row. Attributes: `intercept_frequency`,
 #'   `intercept_severity`, `intercept_premium` (predictions at the base
 #'   point, per unit of exposure) and `base_values` (named list with the
 #'   base value per variable).
@@ -488,7 +492,18 @@ make_rating_table <- function(model_freq = NULL,
     NULL
   }))
   int_rows <- Filter(Negate(is.null), int_rows)
-  if (length(int_rows)) out <- rbind(out, do.call(rbind, int_rows))
+  if (length(int_rows)) {
+    out <- rbind(out, do.call(rbind, int_rows))
+  } else {
+    # An uplift only exists relative to the two main effects it sits
+    # between, so on a tariff without a single interaction term these three
+    # columns are NA in every row. Drop them rather than ship a block of
+    # emptiness that has to be explained. `Group` and `GroupVar` stay:
+    # `is.na(Group)` is how the rest of the package tells a main effect
+    # from an interaction, so those two are structure, not payload.
+    out <- out[, setdiff(names(out), c("Uplift_Frequency", "Uplift_Severity",
+                                       "Uplift_Premium")), drop = FALSE]
+  }
 
   # Thin-cell flag -------------------------------------------------------------
   # Levels backed by very few claims: the GLM applies no shrinkage to a

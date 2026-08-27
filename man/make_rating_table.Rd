@@ -66,7 +66,11 @@ would actually quote.}
 A data.frame with one row per level/grid point per variable
 (columns \code{Variable}, \code{Type}, \code{Level}, \code{LevelNum}, \code{Group}, \code{IsBase},
 \code{Exposure}, \code{ClaimCount}, \verb{Factor_*}, \verb{Uplift_*}, \code{IsThin}, \code{XVar},
-\code{GroupVar}) and attributes \code{intercept_frequency},
+\code{GroupVar}). The three \verb{Uplift_*} columns are present \strong{only when the
+model contains at least one interaction term}; without one they would
+be \code{NA} in every row, so they are dropped. \code{Group} and \code{GroupVar} are
+always there, because \code{is.na(Group)} is how a main-effect row is told
+from an interaction row. Attributes: \code{intercept_frequency},
 \code{intercept_severity}, \code{intercept_premium} (predictions at the base
 point, per unit of exposure) and \code{base_values} (named list with the
 base value per variable).

@@ -223,3 +223,31 @@ test_that("the rating table carries no credibility columns", {
   expect_false(any(grepl("^Credibility", names(tbl))))
   expect_null(attr(tbl, "credibility"))
 })
+
+test_that("the uplift columns are absent without an interaction", {
+  # An uplift only exists relative to the two main effects it sits between,
+  # so on a tariff with no interaction term at all it would be NA in every
+  # row. Better not to ship the column than to ship it empty.
+  expect_false(any(grepl("^Uplift", names(tbl))))
+  expect_true(all(c("Group", "GroupVar") %in% names(tbl)))   # structure stays
+
+  # with an interaction they are back, and filled on exactly those rows
+  expect_true(all(c("Uplift_Frequency", "Uplift_Severity", "Uplift_Premium")
+                  %in% names(tbl2)))
+  expect_false(anyNA(tbl2$Uplift_Frequency[!is.na(tbl2$Group)]))
+  expect_true(all(is.na(tbl2$Uplift_Frequency[is.na(tbl2$Group)])))
+
+  # a variable without an interaction term gets no interaction rows at all
+  expect_false(any(grepl("BOEKJAAR", tbl2$Variable[!is.na(tbl2$Group)])))
+})
+
+test_that("the export copes with a table that has no uplift columns", {
+  skip_if_not_installed("openxlsx")
+  f <- file.path(tempdir(), "no_uplift.xlsx")
+  expect_silent(suppressWarnings(export_rating_table(tbl, f)))
+  sh <- openxlsx::getSheetNames(f)
+  expect_true("Tariff" %in% sh)
+  d1 <- openxlsx::read.xlsx(f, sheet = "REGIO")
+  expect_false(any(grepl("^Uplift", names(d1))))
+  expect_s3_class(make_rating_plot(tbl, "REGIO"), "plotly")
+})

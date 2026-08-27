@@ -899,7 +899,7 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
 | `IsBase` | `TRUE` on the base row/cell (factor exactly 1) |
 | `Exposure`, `ClaimCount` | data volume per level, and per cell for interactions, a continuous variable is binned onto its own grid first, so the cells are filled whatever the two types are |
 | `Factor_Frequency`, `Factor_Severity`, `Factor_Premium` | the multipliers themselves, how many times the base. `Premium = Frequency × Severity`. A variable that is in only one of the two models gets 1.00 in the other |
-| `Uplift_Frequency`, `Uplift_Severity`, `Uplift_Premium` | interaction rows only, the part the two main effects do **not** already explain. See below |
+| `Uplift_Frequency`, `Uplift_Severity`, `Uplift_Premium` | interaction rows only, the part the two main effects do **not** already explain. See below. **Absent altogether when the model carries no interaction term**, since they would then be `NA` in every row |
 | `IsThin` | `TRUE` when `ClaimCount < min_claims`: this factor rests on very few claims and is correspondingly unstable. Dimmed in `make_rating_plot()`, greyed out in the Excel export, see [Thin cells](#thin-cells) |
 
 #### Factor vs Uplift on an interaction row
@@ -925,12 +925,20 @@ Read them for different purposes:
 - **`Factor_*`** is what you put in the tariff. It already contains
   everything.
 - **`Uplift_*`** is what you look at to decide whether the interaction is
-  worth having at all. **An uplift of 1.00 everywhere means there is no
+  worth having at all. It is exactly `exp(β)` of the interaction
+  coefficient: the fitted interaction on its own, with both main effects
+  divided out. **An uplift of 1.00 everywhere means there is no
   interaction**, the two variables are simply additive on the log scale
   and the term is buying you nothing. Uplifts scattered between 0.97 and
   1.03 are noise. Uplifts that run in a clear direction, like 1.20 for the
   young in the city falling to 0.95 for the old in the country, are a real
   effect.
+
+**Ignore the reference cells when you read that.** Every cell where at
+least one of the two variables sits at its base level has an uplift of
+exactly 1.00 *by construction*, not by evidence. On a 3 × 2 interaction
+that is four of the six cells; only two carry an estimated coefficient. So
+"they are all 1.00" only means something once those are set aside.
 
 Never multiply the uplift onto the main effects yourself: that would
 double-count, because `Factor` already includes it.
