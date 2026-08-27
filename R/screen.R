@@ -115,12 +115,19 @@
 #'   candidates are reported as near-duplicates (default 0.95).
 #' @param max_levels Factors with more levels than this are skipped
 #'   (default 50).
-#' @param max_rows Work on a random sample of at most this many rows
-#'   (default 1e6); `NULL` uses everything. Screening ranks candidates, and
-#'   that ranking is stable long before the last million rows are added, so
-#'   on a large portfolio this is much the cheapest lever: every stage
-#'   (baseline refit, boosting, permutation) scales with the row count. The
-#'   reported deviances then refer to the sample.
+#' @param max_rows Work on a random sample of at most this many rows.
+#'   `Inf` (default) uses every row, which is what you want unless the run
+#'   is too slow; `NULL` means the same thing, for calls written against
+#'   the old default.
+#'
+#'   Setting a finite value is the cheapest lever there is when the wait
+#'   gets uncomfortable. Every stage - the baseline refit, the boosting,
+#'   the permutation pass - is linear in rows, while the *ranking* settles
+#'   long before the last few hundred thousand are added: on a 1.5M-row
+#'   book the order of the candidates was unchanged from 100,000 rows
+#'   upwards. `max_rows = 2e5` is a sensible first try. The deviances in
+#'   `summary` and `PermDeviance` then refer to the sample, so they are
+#'   comparable within a run but not across runs of different sizes.
 #' @param nthread Threads for boosting. `NULL` (default) uses one fewer
 #'   than the available cores, capped by `OMP_THREAD_LIMIT` and reduced to
 #'   2 under `R CMD check`, which limits what a package may claim. Boosting
@@ -141,7 +148,7 @@ screen_features <- function(model, features = NULL,
                             max_depth = 2, eta = 0.05, nrounds = 2000,
                             early_stopping_rounds = 40,
                             n_shap = 4000, cor_threshold = 0.95,
-                            max_levels = 50, max_rows = 1e6,
+                            max_levels = 50, max_rows = Inf,
                             nthread = NULL, seed = NULL) {
 
   if (!requireNamespace("xgboost", quietly = TRUE))
@@ -162,16 +169,33 @@ screen_features <- function(model, features = NULL,
   d <- tr$data
 
   # Sub-sample before anything else: every later stage is linear in rows
+  # NULL still means "no cap", so calls written against the old default of
+  # 1e6 keep working; Inf is the same thing said in a way that does not
+  # require knowing the convention.
+  if (is.null(max_rows)) max_rows <- Inf
+  if (!is.numeric(max_rows) || length(max_rows) != 1 || is.na(max_rows) ||
+      max_rows < 1)
+    stop("screen_features: 'max_rows' must be a single number of at least 1, ",
+         "or Inf to use every row.", call. = FALSE)
+
   keep_rows <- seq_len(nrow(d))
-  if (!is.null(max_rows) && nrow(d) > max_rows) {
+  if (is.finite(max_rows) && nrow(d) > max_rows) {
+    max_rows <- floor(max_rows)
     keep_rows <- sort(sample(nrow(d), max_rows))
     message("screen_features: sampling ", format(max_rows, big.mark = ","),
-            " of ", format(nrow(d), big.mark = ","), " rows (max_rows); ",
-            "pass max_rows = NULL to use all of them.")
+            " of ", format(nrow(d), big.mark = ","), " rows (max_rows).")
     d          <- d[keep_rows, , drop = FALSE]
     tr$mf      <- tr$mf[keep_rows, , drop = FALSE]
     tr$weights <- tr$weights[keep_rows]
     if (!is.null(tr$offset)) tr$offset <- tr$offset[keep_rows]
+  } else if (nrow(d) > 5e5) {
+    # Every stage here is linear in rows, so a very large book is worth a
+    # word rather than a silent wait. Not a warning: using every row is the
+    # default and a perfectly reasonable thing to do.
+    message("screen_features: screening on all ",
+            format(nrow(d), big.mark = ","), " rows. The ranking is usually ",
+            "settled long before that, so max_rows = 2e5 is the quickest ",
+            "way to cut the runtime if this is slow.")
   }
 
   fam <- family(model)
@@ -352,10 +376,24 @@ screen_features <- function(model, features = NULL,
                   w_te) - base_dev
   }, numeric(1))
 
-  gain <- xgboost::xgb.importance(model = b2)
-  gain_by <- vapply(features, function(f) {
-    sum(gain$Gain[gain$Feature %in% nm[cols == f]])
-  }, numeric(1))
+  # xgb.importance() cannot read the dump of a booster built on a single
+  # column ("Invalid cast, from String to Array" in xgboost 1.7), and it is
+  # called after every expensive stage is already done. Gain is the column
+  # this function tells you not to rank on, so losing it is a footnote;
+  # losing the whole run to it is not.
+  gain <- tryCatch(xgboost::xgb.importance(model = b2),
+                   error = function(e) NULL)
+  gain_by <- if (is.null(gain)) {
+    warning("screen_features: xgboost could not report Gain for this model ",
+            "(it fails on a single-column booster), so the Gain column is ",
+            "NA. PermDeviance, which is what to rank on, is unaffected.",
+            call. = FALSE)
+    stats::setNames(rep(NA_real_, length(features)), features)
+  } else {
+    vapply(features, function(f) {
+      sum(gain$Gain[gain$Feature %in% nm[cols == f]])
+    }, numeric(1))
+  }
 
   feat_df <- data.frame(
     Feature = features,

@@ -2564,13 +2564,15 @@ screen_features(model, features = NULL, split = c(0.6, 0.2, 0.2),
 | `n_shap` | integer | `4000` | rows for the SHAP interaction ranking; `0` skips it |
 | `cor_threshold` | numeric(1) | `0.95` | report numeric candidates above this as near-duplicates |
 | `max_levels` | integer | `50` | factors with more levels are skipped |
-| `max_rows` | integer or NULL | `1e6` | work on a random sample of at most this many rows; `NULL` uses all |
+| `max_rows` | numeric | `Inf` | work on a random sample of at most this many rows; the default uses every row (`NULL` means the same, for calls written against the old default) |
 | `nthread` | integer or NULL | `NULL` | boosting threads; `NULL` = available cores minus one |
 | `seed` | integer or NULL | `NULL` | reproducible sample, split and boosting |
 
-**Performance.** Boosting dominates the runtime and everything scales with
-the row count, so on a production portfolio the two levers are `max_rows`
-and `nthread`. Measured on a simulated 1.5M-row set with 10 candidates: 148
+**Performance.** The default screens every row. Boosting dominates the
+runtime and everything scales with the row count, so on a production
+portfolio the two levers are `max_rows` and `nthread`; above half a million
+rows the function says so, since the wait is otherwise silent. Measured on
+a simulated 1.5M-row set with 10 candidates: 148
 s on all rows against 7 s at `max_rows = 1e5`, with the signal/noise
 ordering identical at every size. Screening ranks candidates rather than
 estimating them precisely, which is why sampling is cheap here, but very

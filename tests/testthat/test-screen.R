@@ -134,3 +134,48 @@ test_that("unsupported families and bad splits are refused", {
   expect_error(screen_features(m_id), "supported")
   expect_error(screen_features(m_scr, split = c(0.5, 0.2, 0.2)), "split")
 })
+
+test_that("max_rows defaults to every row and accepts Inf or NULL", {
+  # the default used to cap at 1e6 and required NULL to lift it, which is
+  # a convention you had to know about
+  expect_identical(eval(formals(screen_features)$max_rows), Inf)
+
+  set.seed(81)
+  nn <- 3000
+  dm <- data.frame(x = runif(nn), Exposure = round(runif(nn, .3, 1), 3))
+  dm$z <- runif(nn)
+  dm$AantalClaims <- rpois(nn, dm$Exposure * exp(-2 + dm$x))
+  mm <- glm(AantalClaims ~ 1 + offset(log(Exposure)), poisson(), dm)
+  run <- function(...) suppressWarnings(suppressMessages(
+    screen_features(mm, features = c("x", "z"), n_shap = 0, nrounds = 20,
+                    nthread = 2, seed = 1, ...)))
+
+  expect_equal(run()$stats$n_rows_used, nn)          # default: all of them
+  expect_equal(run(max_rows = NULL)$stats$n_rows_used, nn)   # still works
+  expect_equal(run(max_rows = Inf)$stats$n_rows_used, nn)
+  expect_equal(run(max_rows = 1000)$stats$n_rows_used, 1000)
+
+  # and a nonsensical value is refused rather than silently ignored
+  expect_error(run(max_rows = 0), "at least 1")
+  expect_error(run(max_rows = c(10, 20)), "single number")
+  expect_error(run(max_rows = "veel"), "single number")
+})
+
+test_that("a single candidate does not lose the run to xgb.importance", {
+  # xgboost 1.7 cannot read the dump of a booster built on one column, and
+  # xgb.importance is called after every expensive stage is done. Gain is
+  # the column this function says not to rank on, so it degrades to NA.
+  set.seed(82)
+  nn <- 2500
+  d1 <- data.frame(x = runif(nn), Exposure = round(runif(nn, .3, 1), 3))
+  d1$AantalClaims <- rpois(nn, d1$Exposure * exp(-2 + d1$x))
+  m1 <- glm(AantalClaims ~ 1 + offset(log(Exposure)), poisson(), d1)
+
+  r <- suppressMessages(suppressWarnings(
+    screen_features(m1, features = "x", n_shap = 0, nrounds = 20,
+                    nthread = 2, seed = 1)))
+  expect_equal(nrow(r$features), 1)
+  expect_true(is.numeric(r$features$PermDeviance))
+  expect_false(is.na(r$features$PermDeviance))     # the useful column survives
+  expect_s3_class(r$plot, "plotly")
+})

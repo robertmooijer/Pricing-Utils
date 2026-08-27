@@ -15,7 +15,7 @@ screen_features(
   n_shap = 4000,
   cor_threshold = 0.95,
   max_levels = 50,
-  max_rows = 1e+06,
+  max_rows = Inf,
   nthread = NULL,
   seed = NULL
 )
@@ -45,12 +45,19 @@ candidates are reported as near-duplicates (default 0.95).}
 \item{max_levels}{Factors with more levels than this are skipped
 (default 50).}
 
-\item{max_rows}{Work on a random sample of at most this many rows
-(default 1e6); \code{NULL} uses everything. Screening ranks candidates, and
-that ranking is stable long before the last million rows are added, so
-on a large portfolio this is much the cheapest lever: every stage
-(baseline refit, boosting, permutation) scales with the row count. The
-reported deviances then refer to the sample.}
+\item{max_rows}{Work on a random sample of at most this many rows.
+\code{Inf} (default) uses every row, which is what you want unless the run
+is too slow; \code{NULL} means the same thing, for calls written against
+the old default.
+
+Setting a finite value is the cheapest lever there is when the wait
+gets uncomfortable. Every stage - the baseline refit, the boosting,
+the permutation pass - is linear in rows, while the \emph{ranking} settles
+long before the last few hundred thousand are added: on a 1.5M-row
+book the order of the candidates was unchanged from 100,000 rows
+upwards. \code{max_rows = 2e5} is a sensible first try. The deviances in
+\code{summary} and \code{PermDeviance} then refer to the sample, so they are
+comparable within a run but not across runs of different sizes.}
 
 \item{nthread}{Threads for boosting. \code{NULL} (default) uses one fewer
 than the available cores, capped by \code{OMP_THREAD_LIMIT} and reduced to
