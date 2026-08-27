@@ -1821,6 +1821,46 @@ deliberately rare fuel type to show the thin-cell flags, and a real age x
 region interaction) and writes every deliverable: the HTML report, the Excel
 rating workbook and the impact analysis.
 
+Its last block is a worked **bonus-malus** example, which is the case for a
+second offset. A BM ladder is a commercial decision, not something you
+estimate, so it goes in as `offset(log(BM))` next to the exposure and the
+GLM prices everything else around it. The block quotes one policy line by
+line:
+
+```
+Base premium (per policy-year, before BM) 310.9550  310.95
+x LEEFTIJD = 24                             1.1956  371.78
+x REGIO = Noord                             0.7559  281.03
+x GEWICHT = 2000                            1.5960  448.53
+x BRANDSTOF = Elektrisch                    1.3119  588.44
+x BM class M (malus)                        1.4000  823.82
+x Exposure = 0.5 year                       0.5000  411.91
+
+Chain: 411.91   predict(): 411.91   difference: 4.55e-13
+```
+
+Note where BM sits: the rating table gives the tariff **before** the
+discount, because `.model_rate()` removes both offsets, and the ladder is
+applied afterwards — which is how you would publish it anyway.
+
+It then shows the diagnostic that a second offset makes possible. BM
+carries no estimated parameter, so its A/E is **not** pinned to 1 the way a
+fitted categorical term is, and comparing A/E per class is a real test of
+whether the ladder matches the experience. On a correct ladder every class
+sits near 1; priced on a ladder half as steep, the same portfolio gives:
+
+```
+ BM_KLASSE     AE Gebruikt Zou_moeten  Ratio
+         M 1.2066    1.200       1.40 1.1667
+         0 1.0164    1.000       1.00 1.0000
+         5 0.9344    0.925       0.85 0.9189
+        10 0.8477    0.850       0.70 0.8235
+        15 0.7159    0.775       0.55 0.7097
+```
+
+The A/E per class tracks the ratio of the factor that *should* have been
+used to the one that was. A ladder that fits shows no gradient at all.
+
 `demo/detect_interactions.R` simulates a portfolio where young drivers are
 extra risky in the city, fits a GLM *without* that interaction, and walks
 through the full cycle: the one-way checks coming back clean, the scan
