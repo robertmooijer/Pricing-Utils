@@ -310,6 +310,8 @@ suppressMessages(pricing_report(
   m_freq, m_sev, dat, file = rep_file, title = "Motor portfolio – GLM pricing",
   variables = c("LEEFTIJD", "REGIO"),
   include = c("diagnostics", "oneway", "rating")))
-snap_page(rep_file, "pricing-report")
+# taller than the default: the diagnostics block gained the
+# collinearity table, which pushes the residual plot down
+snap_page(rep_file, "pricing-report", height = 1150)
 
 cat("\nAll figures written to", out_dir, "\n")
