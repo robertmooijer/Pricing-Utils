@@ -251,3 +251,75 @@ test_that("the export copes with a table that has no uplift columns", {
   expect_false(any(grepl("^Uplift", names(d1))))
   expect_s3_class(make_rating_plot(tbl, "REGIO"), "plotly")
 })
+
+test_that("the base can be chosen per variable, default unchanged", {
+  set.seed(91)
+  nb <- 20000
+  db <- data.frame(LEEFTIJD = round(runif(nb, 18, 80)),
+                   REGIO = factor(sample(c("Noord", "Zuid", "Randstad"), nb, TRUE)),
+                   Exposure = round(runif(nb, .2, 1), 3))
+  db$AantalClaims <- rpois(nb, db$Exposure *
+                             exp(-2 + .01 * db$LEEFTIJD + .3 * (db$REGIO == "Randstad")))
+  mb <- glm(AantalClaims ~ LEEFTIJD + REGIO + offset(log(Exposure)),
+            poisson(), db)
+  basis <- function(t, v) t[t$Variable == v & is.na(t$Group) & t$IsBase, ]
+
+  t0 <- make_rating_table(mb, NULL, data = db)
+  expect_identical(t0, make_rating_table(mb, NULL, data = db, base = NULL))
+  expect_identical(basis(t0, "REGIO")$Level, "Noord")          # first level
+
+  t1 <- make_rating_table(mb, NULL, data = db,
+                          base = list(REGIO = "Zuid", LEEFTIJD = 40))
+  expect_identical(basis(t1, "REGIO")$Level, "Zuid")
+  expect_equal(basis(t1, "LEEFTIJD")$LevelNum, 40)
+  expect_equal(basis(t1, "REGIO")$Factor_Frequency, 1)
+  expect_equal(basis(t1, "LEEFTIJD")$Factor_Frequency, 1)
+  # exactly one base row per variable, and no duplicate grid point at 40
+  expect_equal(nrow(basis(t1, "LEEFTIJD")), 1)
+  expect_equal(sum(t1$Variable == "LEEFTIJD" & t1$LevelNum == 40), 1)
+
+  # a named vector works too, and overrides base_level for that variable
+  t2 <- make_rating_table(mb, NULL, data = db, base_level = "exposure",
+                          base = c(REGIO = "Zuid"))
+  expect_identical(basis(t2, "REGIO")$Level, "Zuid")
+
+  # a base between grid points is placed exactly, not snapped
+  t3 <- make_rating_table(mb, NULL, data = db, base = list(LEEFTIJD = 40.5))
+  expect_equal(basis(t3, "LEEFTIJD")$LevelNum, 40.5)
+
+  # premiums do not move: same policy, both tables
+  prem <- function(t, age, reg) {
+    f <- function(v, l) t$Factor_Frequency[t$Variable == v & is.na(t$Group) &
+                                           t$Level == l]
+    attr(t, "intercept_frequency") * f("LEEFTIJD", age) * f("REGIO", reg)
+  }
+  expect_equal(prem(t0, "60", "Randstad"), prem(t1, "60", "Randstad"),
+               tolerance = 1e-10)
+  nd <- data.frame(LEEFTIJD = 60, REGIO = factor("Randstad", levels(db$REGIO)),
+                   Exposure = 1)
+  expect_equal(prem(t1, "60", "Randstad"),
+               as.numeric(predict(mb, nd, type = "response")), tolerance = 1e-10)
+})
+
+test_that("a wrong base is refused or reported", {
+  set.seed(92)
+  nb <- 5000
+  db <- data.frame(LEEFTIJD = round(runif(nb, 18, 80)),
+                   REGIO = factor(sample(c("Noord", "Zuid"), nb, TRUE)),
+                   Exposure = round(runif(nb, .2, 1), 3))
+  db$AantalClaims <- rpois(nb, db$Exposure * .12)
+  mb <- glm(AantalClaims ~ LEEFTIJD + REGIO + offset(log(Exposure)),
+            poisson(), db)
+  expect_error(make_rating_table(mb, NULL, data = db, base = list(REGIO = "Oost")),
+               "not a level")
+  expect_error(make_rating_table(mb, NULL, data = db, base = list(LEEFTIJD = "oud")),
+               "must be a number")
+  expect_error(make_rating_table(mb, NULL, data = db, base = list(Exposure = 2)),
+               "offset or exposure")
+  expect_error(make_rating_table(mb, NULL, data = db, base = list("Zuid")),
+               "must be named")
+  expect_warning(make_rating_table(mb, NULL, data = db, base = list(REGOI = "Zuid")),
+                 "ignored: REGOI")
+  expect_warning(make_rating_table(mb, NULL, data = db, base = list(LEEFTIJD = 120)),
+                 "outside the data")
+})

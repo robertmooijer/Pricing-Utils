@@ -52,6 +52,17 @@
 #'   continuous variable is reported rather than ignored. The base point
 #'   is snapped onto the grid, so the row with factor 1 is a value you
 #'   would actually quote.
+#' @param base Optional: choose the base (factor 1) per variable, as a
+#'   named list or vector, e.g. `list(REGIO = "Zuid", LEEFTIJD = 40)`.
+#'   `NULL` (default) keeps the rules above. A categorical base must be an
+#'   existing level and overrides `base_level` for that variable, without
+#'   refitting the model. A continuous base is placed on the grid exactly
+#'   as given rather than snapped, with a warning if it lies outside the
+#'   data. Variables not named keep their default base; offset and exposure
+#'   variables cannot be named, since their base of 1 is what makes the
+#'   intercept a rate per unit of exposure. The choice only moves the
+#'   factors and the intercept against each other: every premium stays the
+#'   same.
 #' @param min_claims Thin-cell threshold: levels/grid points backed by
 #'   fewer claims get `IsThin = TRUE` (default 30). A GLM applies no
 #'   shrinkage to a categorical level, so such a factor comes essentially
@@ -80,7 +91,8 @@ make_rating_table <- function(model_freq = NULL,
                               base_level   = c("first", "exposure"),
                               trim         = c(0, 1),
                               min_claims   = 30,
-                              grid_step    = NULL) {
+                              grid_step    = NULL,
+                              base         = NULL) {
 
   base_level <- match.arg(base_level)
   if (is.null(model_freq) && is.null(model_sev)) {
@@ -148,6 +160,9 @@ make_rating_table <- function(model_freq = NULL,
     if (bv == exposure_col || bv %in% offset_vars) return(1)
     if (var_is_cat(bv)) {
       lv <- var_levels(bv)
+      # A level named in `base` wins over base_level for that variable
+      if (!is.null(base) && bv %in% names(base))
+        return(as.character(base[[bv]]))
       if (base_level == "exposure") {
         ag   <- d_dt[, .(E = sum(get(exposure_col), na.rm = TRUE)), by = bv]
         cand <- as.character(ag[[bv]])[order(-ag$E)]
@@ -238,15 +253,24 @@ make_rating_table <- function(model_freq = NULL,
       out <- list(values = uv,
                   base = uv[which.min(abs(uv - med))],
                   step = NA_real_)
-      assign(key, out, envir = grid_cache)
-      return(out)
+    } else {
+      if (!is.finite(step)) step <- .nice_step(rng, n_points, int_data)
+      # snap the base onto the same grid, so the sequence stays readable and
+      # the row with factor 1 is a value someone would actually quote
+      b0 <- .snap_to_step(med, step, rng[1], rng[2])
+      out <- list(values = .step_grid(rng[1], rng[2], step, b0),
+                  base = b0, step = step)
     }
-    if (!is.finite(step)) step <- .nice_step(rng, n_points, int_data)
-    # snap the base onto the same grid, so the sequence stays readable and
-    # the row with factor 1 is a value someone would actually quote
-    base <- .snap_to_step(med, step, rng[1], rng[2])
-    out <- list(values = .step_grid(rng[1], rng[2], step, base),
-                base = base, step = step)
+    # A base chosen in `base` replaces the median. It is put on the grid
+    # exactly as given - the user asked for 40, not for the nearest grid
+    # point - after dropping any grid value that is the same number up to
+    # rounding, so there is one row with factor 1 and not two.
+    if (!is.null(base) && bv %in% names(base)) {
+      ub   <- as.numeric(base[[bv]])
+      vals <- out$values[abs(out$values - ub) > 1e-9 * max(1, abs(ub))]
+      out$values <- sort(c(vals, ub))
+      out$base   <- ub
+    }
     assign(key, out, envir = grid_cache)
     out
   }
@@ -285,6 +309,51 @@ make_rating_table <- function(model_freq = NULL,
   }
   if (!length(uniq_bases))
     stop("make_rating_table: no usable variables found.")
+
+  # A chosen base per variable. Checked up front, because a wrong one does
+  # not fail later: it silently moves every factor of that variable.
+  if (!is.null(base)) {
+    base <- as.list(base)
+    if (is.null(names(base)) || any(!nzchar(names(base))))
+      stop("make_rating_table: 'base' must be named, e.g. ",
+           "list(REGIO = \"Zuid\", LEEFTIJD = 40).", call. = FALSE)
+    fixed <- intersect(names(base), c(exposure_col, offset_vars))
+    if (length(fixed))
+      stop("make_rating_table: '", paste(fixed, collapse = ", "), "' is an ",
+           "offset or exposure variable; its base is always 1, which is what ",
+           "makes the intercept a rate per unit of exposure.", call. = FALSE)
+    unused <- setdiff(names(base), uniq_bases)
+    if (length(unused)) {
+      warning("make_rating_table: 'base' names with no variable in the model, ",
+              "and therefore ignored: ", paste(unused, collapse = ", "), ".",
+              call. = FALSE)
+      base <- base[setdiff(names(base), unused)]
+    }
+    for (bv in names(base)) {
+      val <- base[[bv]]
+      if (length(val) != 1)
+        stop("make_rating_table: 'base' for '", bv, "' must be one value.",
+             call. = FALSE)
+      if (var_is_cat(bv)) {
+        lv <- var_levels(bv)
+        if (!as.character(val) %in% lv)
+          stop("make_rating_table: '", val, "' is not a level of '", bv,
+               "'. Levels: ", paste(lv, collapse = ", "), ".", call. = FALSE)
+      } else {
+        num <- suppressWarnings(as.numeric(val))
+        if (!is.finite(num))
+          stop("make_rating_table: 'base' for '", bv, "' must be a number.",
+               call. = FALSE)
+        r <- range(data[[bv]], na.rm = TRUE)
+        if (num < r[1] || num > r[2])
+          warning("make_rating_table: the base ", num, " for '", bv,
+                  "' lies outside the data (", r[1], " to ", r[2], "); ",
+                  "every factor of that variable is then relative to an ",
+                  "extrapolated point.", call. = FALSE)
+      }
+    }
+    if (!length(base)) base <- NULL
+  }
 
   # A misspelled name in grid_step would otherwise be ignored in silence,
   # leaving the user convinced they had set a step they had not

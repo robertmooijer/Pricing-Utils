@@ -869,13 +869,25 @@ level of each categorical variable (or the largest by exposure, with
 reference point, not a recommendation, moving it changes every factor and
 the base premium together, and leaves all quoted prices identical.
 
+To pick the base yourself, name it per variable with `base`. The model is
+not refitted; only the factors and the base premium move:
+
+```r
+make_rating_table(m_freq, m_sev, data = dat,
+                  base = list(REGIO = "Zuid", LEEFTIJD = 40))
+```
+
+A categorical base must be an existing level. A continuous base is used
+exactly as given, even between grid points, and a value outside the data
+gets a warning. Variables you do not name keep the default above.
+
 ```r
 make_rating_table(model_freq = NULL, model_sev = NULL, data,
                   grid_res = 50,
                   exposure_col = "Exposure", claims_col = "AantalClaims",
                   base_level = c("first", "exposure"),
                   trim = c(0, 1),
-                  min_claims = 30, grid_step = NULL)
+                  min_claims = 30, grid_step = NULL, base = NULL)
 ```
 
 | Argument | Description |
@@ -887,6 +899,7 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
 | `base_level` | `"first"` = first factor level is the reference; `"exposure"` = the level with the largest exposure is the reference |
 | `trim` | quantile range for continuous grids, e.g. `c(0.005, 0.995)` to avoid outlier tails and spline extrapolation |
 | `min_claims` | thin-cell threshold: levels with fewer claims get `IsThin = TRUE` (categorical thin levels also raise a warning) |
+| `base` | your own base per variable, e.g. `list(REGIO = "Zuid", LEEFTIJD = 40)`; `NULL` keeps the default base |
 
 **Returns** a data.frame with one row per level/grid point per variable:
 
@@ -1402,8 +1415,8 @@ say as one with a full year.
 For log-link GLMs the prediction factorises multiplicatively. The rating
 table exploits this with a single consistent **base point**:
 
-- categorical variables → reference level (`base_level`),
-- continuous variables → the **median** (inserted as an explicit grid point),
+- categorical variables → reference level (`base_level`), unless set in `base`,
+- continuous variables → the **median** (inserted as an explicit grid point), unless set in `base`,
 - the exposure column → **1**.
 
 Every factor is `prediction(level, others at base) / prediction(base)`, and
@@ -2674,7 +2687,8 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
                   grid_res = 50, exposure_col = "Exposure",
                   claims_col = "AantalClaims",
                   base_level = c("first", "exposure"),
-                  trim = c(0, 1), min_claims = 30)
+                  trim = c(0, 1), min_claims = 30, grid_step = NULL,
+                  base = NULL)
 ```
 
 | Argument | Type | Default | Meaning |
@@ -2682,6 +2696,8 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
 | `base_level` | character(1) | `"first"` | reference level: first `xlevel`, or the level with the largest exposure |
 | `trim` | numeric(2) | `c(0, 1)` | quantile range for continuous grids, e.g. `c(.005, .995)` against outlier extrapolation |
 | `min_claims` | integer | `30` | thin-cell threshold for `IsThin` |
+| `grid_step` | numeric or named list | `NULL` | grid step for continuous variables, globally or per variable |
+| `base` | named list or vector | `NULL` | base (factor 1) per variable; overrides `base_level` and the median for the variables named |
 
 **The base point.** One consistent convention: categorical variables at
 their reference level, continuous variables at their **median** (inserted as

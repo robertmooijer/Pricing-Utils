@@ -14,7 +14,8 @@ make_rating_table(
   base_level = c("first", "exposure"),
   trim = c(0, 1),
   min_claims = 30,
-  grid_step = NULL
+  grid_step = NULL,
+  base = NULL
 )
 }
 \arguments{
@@ -61,6 +62,18 @@ fine, the rest keep the automatic step; a name that matches no
 continuous variable is reported rather than ignored. The base point
 is snapped onto the grid, so the row with factor 1 is a value you
 would actually quote.}
+
+\item{base}{Optional: choose the base (factor 1) per variable, as a
+named list or vector, e.g. \code{list(REGIO = "Zuid", LEEFTIJD = 40)}.
+\code{NULL} (default) keeps the rules above. A categorical base must be an
+existing level and overrides \code{base_level} for that variable, without
+refitting the model. A continuous base is placed on the grid exactly
+as given rather than snapped, with a warning if it lies outside the
+data. Variables not named keep their default base; offset and exposure
+variables cannot be named, since their base of 1 is what makes the
+intercept a rate per unit of exposure. The choice only moves the
+factors and the intercept against each other: every premium stays the
+same.}
 }
 \value{
 A data.frame with one row per level/grid point per variable
