@@ -339,11 +339,11 @@ geometric: [`make_pdp()` specification](#make_pdp-specification).
 
 ### `plot_glm_predictor()`
 
-Actual-vs-expected plot per predictor, computed on the model's own training
-data.
+Actual-vs-expected plot per predictor, on the model's own training data or
+on any later data you pass.
 
 ```r
-plot_glm_predictor(model, predictor, n_bins = 150,
+plot_glm_predictor(model, predictor, data = NULL, n_bins = 150,
                    weight_var = NULL, weight_label = NULL,
                    color = ta_year_palette(1), color_pred = ta_gold,
                    title = NULL, ylab = NULL, xlab = NULL,
@@ -362,6 +362,30 @@ Mode is detected automatically:
   claim-count-weighted for severity).
 - `weight_var` overrides the weight column explicitly (must exist in
   `model$data`; an unknown name is an error, not silently ignored).
+
+**Monitoring a later period.** `data` evaluates the same comparison on rows
+the model never saw, which is the usual way to check whether a tariff still
+matches the experience:
+
+```r
+plot_glm_predictor(m_freq, "REGIO", data = boekjaar_2025,
+                   title = "Frequency - REGIO - 2025")
+```
+
+The data needs the predictors, the response and any weight or offset
+column, since the plot holds the realised figure against the prediction.
+Rows with a missing value in a model variable are dropped, as `glm()`
+dropped them at fit time, and a factor level the model never saw is an
+error rather than a quietly missing row. Weights and offsets are
+re-evaluated on the new rows, so a severity model weighted by the claim
+count keeps weighting by that period's claim counts.
+
+One thing reads differently out of sample. In-sample, a categorical term
+that is in the model is pinned to the observed level under a canonical
+link, so the two lines coincide by construction and tell you nothing. On
+other data nothing is pinned, and a gap is evidence that the level has
+moved. The dispersion behind the error bars still comes from the fitted
+model, because it is a property of the model and not of the period.
 
 **More than one offset.** A model may carry a second, known relativity as
 an offset next to the exposure — a bonus-malus scale that is given rather
@@ -2135,10 +2159,11 @@ granular covariates or lower `grid_res`.
 ### `plot_glm_predictor()` specification
 
 **Purpose.** Actual versus expected per (binned) level of one predictor,
-on the model's own rows.
+on the model's own rows or on data passed in.
 
 ```r
-plot_glm_predictor(model, predictor, n_bins = 150, weight_var = NULL,
+plot_glm_predictor(model, predictor, data = NULL,
+                   n_bins = 150, weight_var = NULL,
                    weight_label = NULL, color = ta_year_palette(1),
                    color_pred = ta_gold, title = NULL, ylab = NULL,
                    xlab = NULL, metric_fmt = 4,
@@ -2147,8 +2172,9 @@ plot_glm_predictor(model, predictor, n_bins = 150, weight_var = NULL,
 
 | Argument | Type | Default | Meaning |
 |---|---|---|---|
+| `data` | data.frame or NULL | `NULL` | rows to evaluate on; `NULL` = the model's own rows. Needs the predictors, the response and any weight or offset column |
 | `n_bins` | integer | `150` | **maximum number of points**, not a fixed bin count |
-| `weight_var` | character(1) or NULL | `NULL` | override the weight column (must exist in `model$data`) |
+| `weight_var` | character(1) or NULL | `NULL` | override the weight column (must exist in `model$data`, or in `data`) |
 | `bin_type` | character(1) | `"quantile"` | `"quantile"` = equal counts per bin; `"width"` = equal width |
 | `y_range` | numeric(2) or NULL | `NULL` | fix the primary axis, e.g. to compare predictors |
 
@@ -2164,7 +2190,9 @@ bin; an unbinned point at its exact value.
 **Warnings.** An offset with a non-log link (falls back to prior weights).
 
 **Errors.** Not a `glm`; `n_bins < 2`; predictor not found; unknown
-`weight_var`; invalid `y_range`.
+`weight_var`; invalid `y_range`; `data` empty, missing a column the model
+needs, carrying a factor level the model never saw, or leaving no usable
+row after missing values are dropped.
 
 **Cost.** One `predict()` over the model rows plus a group-by, O(n).
 

@@ -41,6 +41,56 @@
   list(mf = mf, data = d, weights = as.numeric(pw), offset = model$offset)
 }
 
+# The same pieces as .glm_training_data(), but evaluated on other data, so
+# a model can be held against a period it was never fitted on. The rows
+# kept are the ones the model's variables can be evaluated on; a row with
+# a missing value in one of them is dropped, exactly as glm() dropped it
+# at fit time.
+.glm_newdata_parts <- function(model, newdata, fn = "pricingtoolsRmO") {
+  newdata <- .as_df(newdata)
+  if (!is.data.frame(newdata) || !nrow(newdata))
+    stop(fn, ": 'data' must be a data frame with at least one row.",
+         call. = FALSE)
+
+  tt   <- stats::terms(model)
+  wexp <- if (!is.null(model$call)) model$call$weights else NULL
+  need <- unique(c(all.vars(tt), .offset_vars(model), all.vars(wexp)))
+  miss <- setdiff(need, names(newdata))
+  if (length(miss))
+    stop(fn, ": 'data' has no column(s) ", paste(miss, collapse = ", "),
+         ". Besides the predictors, the response and any weight or offset ",
+         "column are needed as well, because the point of the plot is to ",
+         "hold the realised figure against the prediction.", call. = FALSE)
+
+  # xlev makes a level the model never saw an error here, with the name of
+  # the variable in it, rather than a bare predict() failure further down.
+  mf <- tryCatch(
+    .as_df(stats::model.frame(tt, data = newdata,
+                              na.action = stats::na.omit,
+                              xlev = model$xlevels)),
+    error = function(e)
+      stop(fn, ": 'data' cannot be run through the model: ",
+           conditionMessage(e), call. = FALSE))
+  if (!nrow(mf))
+    stop(fn, ": no row of 'data' is usable; every row has a missing value ",
+         "in one of the model's variables.", call. = FALSE)
+  d <- newdata[match(rownames(mf), rownames(newdata)), , drop = FALSE]
+
+  # Prior weights live in the call, not in the terms, so they have to be
+  # re-evaluated on the new rows. Recycling the fitted weights instead
+  # would silently pair one period's claim counts with another's rows.
+  pw <- if (is.null(wexp)) rep(1, nrow(d)) else {
+    v <- suppressWarnings(as.numeric(
+      eval(wexp, d, environment(formula(model)))))
+    if (length(v) != nrow(d) || anyNA(v))
+      stop(fn, ": the model's weights (", deparse(wexp)[1], ") do not give ",
+           "one usable value per row of 'data'.", call. = FALSE)
+    v
+  }
+  off <- if (length(.offset_exprs(model))) .offset_value(model, d) else NULL
+  list(mf = mf, data = d, weights = pw, offset = off)
+}
+
 # Validate an optional axis range c(lo, hi). Returns it as numeric, or
 # NULL when not supplied (in which case the axis auto-scales).
 .check_range <- function(rng, fn, arg = "y_range") {

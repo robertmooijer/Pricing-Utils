@@ -20,6 +20,29 @@
 #'
 #' @param model A fitted glm object.
 #' @param predictor Name of the predictor (string).
+#' @param data Data to evaluate on. `NULL` (default) uses the model's own
+#'   rows, which is in-sample. Pass a later accounting year, a holdout or
+#'   a renewal month to see whether the tariff still matches the
+#'   experience: that is the technical monitor this plot is usually
+#'   wanted for.
+#'
+#'   The data needs the predictors, the response, and any weight or
+#'   offset column, since the whole point is to hold the realised figure
+#'   against the prediction. Rows with a missing value in one of the
+#'   model's variables are dropped, as `glm()` dropped them at fit time,
+#'   and a factor level the model never saw is an error rather than a
+#'   silently omitted row. The weights are re-evaluated on the new rows,
+#'   so a severity model weighted by the claim count keeps weighting by
+#'   that period's claim counts.
+#'
+#'   One thing changes in how the chart reads. In-sample, a categorical
+#'   term that is in the model is pinned to the observed level under a
+#'   canonical link (see `ci` below), so there is nothing to see there by
+#'   construction. On other data nothing is pinned, and a gap between the
+#'   two lines is real evidence that the level has moved.
+#'
+#'   The title does not say which data was used, so set `title` yourself
+#'   when you put several periods next to each other.
 #' @param n_bins Maximum number of points for a numeric predictor
 #'   (default 150). Predictors with at most this many distinct values are
 #'   shown unbinned, one point per value.
@@ -58,7 +81,9 @@
 #'   `phi * sum(V(mu))`, so the rate divides that by the exposure, and for
 #'   a weighted mean it is the usual `phi * sum(w V(mu)) / (sum w)^2`.
 #'   Poisson and binomial hold the dispersion at 1, since that is the
-#'   assumption being examined.
+#'   assumption being examined. With `data`, the dispersion still comes
+#'   from the fitted model: it is a property of the model, not of the
+#'   period being monitored.
 #'
 #'   Measured coverage on a correctly specified Poisson is 0.96 for a
 #'   binned continuous predictor and 0.98 for a categorical one outside
@@ -82,6 +107,7 @@
 #'   "Predicted" line.
 #' @export
 plot_glm_predictor <- function(model, predictor,
+                               data         = NULL,
                                n_bins       = 150,
                                weight_var   = NULL,
                                weight_label = NULL,
@@ -103,7 +129,8 @@ plot_glm_predictor <- function(model, predictor,
          "between 0 and 1.", call. = FALSE)
   y_range <- .check_range(y_range, "plot_glm_predictor")
 
-  tr            <- .glm_training_data(model, "plot_glm_predictor")
+  tr <- if (is.null(data)) .glm_training_data(model, "plot_glm_predictor")
+        else .glm_newdata_parts(model, data, "plot_glm_predictor")
   model_data    <- tr$mf
   response_name <- names(model_data)[1]
 
@@ -165,8 +192,8 @@ plot_glm_predictor <- function(model, predictor,
   # Manual override of the weight column
   if (!is.null(weight_var)) {
     if (is.null(tr$data) || !weight_var %in% names(tr$data))
-      stop("plot_glm_predictor: weight_var '", weight_var,
-           "' not found in model$data.", call. = FALSE)
+      stop("plot_glm_predictor: weight_var '", weight_var, "' not found in ",
+           if (is.null(data)) "model$data." else "'data'.", call. = FALSE)
     w <- tr$data[[weight_var]]
   }
   # Show bars as soon as there is a real weight concept (offset, weights or override)
@@ -174,10 +201,16 @@ plot_glm_predictor <- function(model, predictor,
                 isTRUE(any(w != 1, na.rm = TRUE))
   if (!is.null(weight_label)) w_title <- weight_label
 
+  # On other data the prediction has to be asked for row by row; the
+  # offset rides along with it, so both series stay counts for a count
+  # model exactly as they are in-sample.
+  mu <- if (is.null(data)) as.numeric(predict(model, type = "response"))
+        else as.numeric(predict(model, newdata = tr$data, type = "response"))
+
   df <- data.frame(
     x_var     = x_values,
     observed  = as.numeric(model_data[[response_name]]),
-    predicted = predict(model, type = "response"),
+    predicted = mu,
     weight    = w
   )
   # Sampling variance of the response, from the family's own variance

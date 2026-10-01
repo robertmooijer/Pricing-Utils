@@ -221,3 +221,120 @@ test_that("binned residuals are drawn as points, not a line", {
   expect_identical(mr$mode, "markers")
   expect_false(grepl("lines", mr$mode, fixed = TRUE))
 })
+
+test_that("plot_glm_predictor evaluates another period when 'data' is given", {
+  set.seed(63)
+  nn <- 20000
+  mk <- function(seed, bump) {
+    set.seed(seed)
+    d <- data.frame(R = factor(sample(c("N", "O", "Z"), nn, TRUE)),
+                    LFT = round(runif(nn, 18, 80)),
+                    Exposure = round(runif(nn, .3, 1), 3))
+    d$AantalClaims <- rpois(nn, d$Exposure *
+                              exp(-2.2 + .3 * (d$R == "Z") + bump * (d$R == "O")))
+    d
+  }
+  d19 <- mk(63, 0)
+  d20 <- mk(64, 0.5)            # "O" deteriorates in the new year
+  mc  <- glm(AantalClaims ~ R + offset(log(Exposure)), poisson(), d19)
+  tr <- function(p, nm) {
+    b <- plotly::plotly_build(p)
+    for (t in b$x$data) if (identical(t$name, nm)) return(t)
+    NULL
+  }
+
+  p_new <- plot_glm_predictor(mc, "R", data = d20)
+  expect_s3_class(p_new, "plotly")
+  o <- tr(p_new, "Observed")
+  e <- tr(p_new, "Predicted")
+  # observed = that year's own rate; predicted = the tariff applied to it
+  hand_o <- tapply(seq_len(nn), d20$R, function(i)
+    sum(d20$AantalClaims[i]) / sum(d20$Exposure[i]))
+  hand_e <- tapply(seq_len(nn), d20$R, function(i)
+    sum(predict(mc, d20[i, ], type = "response")) / sum(d20$Exposure[i]))
+  expect_equal(as.vector(unlist(o$y)), as.vector(hand_o[o$x]), tolerance = 1e-10)
+  expect_equal(as.vector(unlist(e$y)), as.vector(hand_e[e$x]), tolerance = 1e-10)
+
+  # in-sample the two series coincide on a level in the model; out of
+  # sample they do not, which is the whole point of monitoring
+  o0 <- tr(plot_glm_predictor(mc, "R"), "Observed")
+  e0 <- tr(plot_glm_predictor(mc, "R"), "Predicted")
+  expect_equal(as.vector(unlist(o0$y)), as.vector(unlist(e0$y)), tolerance = 1e-8)
+  i_o <- which(o$x == "O")
+  expect_gt(unlist(o$y)[i_o] / unlist(e$y)[i_o], 1.2)
+
+  # the bars show the new period's exposure, not the old one's
+  w <- tr(p_new, "Exposure")
+  expect_equal(as.vector(unlist(w$y)),
+               as.vector(tapply(d20$Exposure, d20$R, sum)[w$x]),
+               tolerance = 1e-8)
+
+  # a predictor outside the model is read from 'data' as well
+  expect_s3_class(plot_glm_predictor(mc, "LFT", data = d20, n_bins = 20),
+                  "plotly")
+})
+
+test_that("plot_glm_predictor on new data re-evaluates weights and offsets", {
+  set.seed(65)
+  nn <- 6000
+  d <- data.frame(R = factor(sample(c("N", "Z"), nn, TRUE)),
+                  Maanden = sample(1:12, nn, TRUE))
+  d$AantalClaims <- rpois(nn, d$Maanden / 12 * .3) + 1L
+  d$Avg <- rgamma(nn, 3, scale = 700) * ifelse(d$R == "Z", 1.2, 1)
+  m_sev <- glm(Avg ~ R, Gamma("log"), d, weights = AantalClaims)
+  d2 <- d[sample(nn, 3000), ]
+  d2$Avg <- d2$Avg * 1.15                     # a severity trend of 15%
+
+  tr <- function(p, nm) {
+    b <- plotly::plotly_build(p)
+    for (t in b$x$data) if (identical(t$name, nm)) return(t)
+    NULL
+  }
+  o <- tr(plot_glm_predictor(m_sev, "R", data = d2), "Observed")
+  hand <- tapply(seq_len(nrow(d2)), d2$R, function(i)
+    weighted.mean(d2$Avg[i], d2$AantalClaims[i]))
+  expect_equal(as.vector(unlist(o$y)), as.vector(hand[o$x]), tolerance = 1e-10)
+  # the weight bars are the new period's claim counts
+  w <- tr(plot_glm_predictor(m_sev, "R", data = d2), "Weight")
+  expect_equal(as.vector(unlist(w$y)),
+               as.vector(tapply(d2$AantalClaims, d2$R, sum)[w$x]),
+               tolerance = 1e-8)
+
+  # an offset passed as an argument rather than in the formula also follows
+  m_f <- glm(AantalClaims ~ R, poisson(), d, offset = log(Maanden / 12))
+  o2 <- tr(plot_glm_predictor(m_f, "R", data = d2, exposure_col = "Maanden"),
+           "Observed")
+  expect_equal(as.vector(unlist(o2$y)),
+               as.vector(tapply(seq_len(nrow(d2)), d2$R, function(i)
+                 sum(d2$AantalClaims[i]) / sum(d2$Maanden[i]))[o2$x]),
+               tolerance = 1e-10)
+})
+
+test_that("unusable monitoring data is refused rather than guessed at", {
+  set.seed(66)
+  nn <- 4000
+  d <- data.frame(R = factor(sample(c("N", "Z"), nn, TRUE)),
+                  Exposure = runif(nn, .3, 1))
+  d$AantalClaims <- rpois(nn, d$Exposure * .2)
+  mc <- glm(AantalClaims ~ R + offset(log(Exposure)), poisson(), d)
+
+  expect_error(plot_glm_predictor(mc, "R", data = d[, c("R", "Exposure")]),
+               "AantalClaims")
+  expect_error(plot_glm_predictor(mc, "R", data = d[0, ]), "at least one row")
+  d_new <- d
+  levels(d_new$R) <- c("N", "Z")
+  d_new$R <- as.character(d_new$R)
+  d_new$R[1] <- "O"                           # a level the model never saw
+  expect_error(plot_glm_predictor(mc, "R", data = d_new), "new level")
+
+  # rows with a missing value are dropped, exactly as glm() dropped them
+  d_na <- d
+  d_na$R[1:50] <- NA
+  tr <- function(p, nm) {
+    b <- plotly::plotly_build(p)
+    for (t in b$x$data) if (identical(t$name, nm)) return(t)
+    NULL
+  }
+  w <- tr(plot_glm_predictor(mc, "R", data = d_na), "Exposure")
+  expect_equal(sum(unlist(w$y)), sum(d$Exposure[-(1:50)]), tolerance = 1e-8)
+})

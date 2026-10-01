@@ -7,6 +7,7 @@
 plot_glm_predictor(
   model,
   predictor,
+  data = NULL,
   n_bins = 150,
   weight_var = NULL,
   weight_label = NULL,
@@ -27,6 +28,30 @@ plot_glm_predictor(
 \item{model}{A fitted glm object.}
 
 \item{predictor}{Name of the predictor (string).}
+
+\item{data}{Data to evaluate on. \code{NULL} (default) uses the model's own
+rows, which is in-sample. Pass a later accounting year, a holdout or
+a renewal month to see whether the tariff still matches the
+experience: that is the technical monitor this plot is usually
+wanted for.
+
+The data needs the predictors, the response, and any weight or
+offset column, since the whole point is to hold the realised figure
+against the prediction. Rows with a missing value in one of the
+model's variables are dropped, as \code{glm()} dropped them at fit time,
+and a factor level the model never saw is an error rather than a
+silently omitted row. The weights are re-evaluated on the new rows,
+so a severity model weighted by the claim count keeps weighting by
+that period's claim counts.
+
+One thing changes in how the chart reads. In-sample, a categorical
+term that is in the model is pinned to the observed level under a
+canonical link (see \code{ci} below), so there is nothing to see there by
+construction. On other data nothing is pinned, and a gap between the
+two lines is real evidence that the level has moved.
+
+The title does not say which data was used, so set \code{title} yourself
+when you put several periods next to each other.}
 
 \item{n_bins}{Maximum number of points for a numeric predictor
 (default 150). Predictors with at most this many distinct values are
@@ -75,7 +100,9 @@ families that estimate one: for counts the bin total has variance
 \code{phi * sum(V(mu))}, so the rate divides that by the exposure, and for
 a weighted mean it is the usual \verb{phi * sum(w V(mu)) / (sum w)^2}.
 Poisson and binomial hold the dispersion at 1, since that is the
-assumption being examined.
+assumption being examined. With \code{data}, the dispersion still comes
+from the fitted model: it is a property of the model, not of the
+period being monitored.
 
 Measured coverage on a correctly specified Poisson is 0.96 for a
 binned continuous predictor and 0.98 for a categorical one outside
