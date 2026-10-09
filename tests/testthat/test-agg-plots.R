@@ -338,3 +338,87 @@ test_that("unusable monitoring data is refused rather than guessed at", {
   w <- tr(plot_glm_predictor(mc, "R", data = d_na), "Exposure")
   expect_equal(sum(unlist(w$y)), sum(d$Exposure[-(1:50)]), tolerance = 1e-8)
 })
+
+test_that("ratio = TRUE plots A/E against a reference line at 1", {
+  set.seed(67)
+  nn <- 20000
+  mk <- function(seed, bump) {
+    set.seed(seed)
+    d <- data.frame(R = factor(sample(c("N", "O", "Z"), nn, TRUE)),
+                    LFT = round(runif(nn, 18, 80)),
+                    Exposure = round(runif(nn, .3, 1), 3))
+    d$AantalClaims <- rpois(nn, d$Exposure *
+                              exp(-2.2 + .3 * (d$R == "Z") + bump * (d$R == "O")))
+    d
+  }
+  d19 <- mk(67, 0)
+  d20 <- mk(68, 0.4)
+  mc  <- glm(AantalClaims ~ R + offset(log(Exposure)), poisson(), d19)
+  tr <- function(p, nm) {
+    b <- plotly::plotly_build(p)
+    for (t in b$x$data) if (identical(t$name, nm)) return(t)
+    NULL
+  }
+
+  p <- plot_glm_predictor(mc, "R", data = d20, ratio = TRUE)
+  ae <- tr(p, "A/E")
+  expect_false(is.null(ae))
+  expect_null(tr(p, "Observed"))              # one line, not two
+  expect_null(tr(p, "Predicted"))
+
+  # the plotted ratio is sum(actual) / sum(expected) per level
+  hand <- tapply(seq_len(nn), d20$R, function(i)
+    sum(d20$AantalClaims[i]) / sum(predict(mc, d20[i, ], type = "response")))
+  expect_equal(as.vector(unlist(ae$y)), as.vector(hand[ae$x]),
+               tolerance = 1e-10)
+
+  # it is exactly the ratio of the two lines of the default plot
+  p2 <- plot_glm_predictor(mc, "R", data = d20)
+  expect_equal(as.vector(unlist(ae$y)),
+               as.vector(unlist(tr(p2, "Observed")$y) /
+                         unlist(tr(p2, "Predicted")$y)), tolerance = 1e-10)
+
+  # the error bars are the observed bars, carried through the division
+  expect_equal(as.vector(unlist(ae$error_y$array)),
+               as.vector(unlist(tr(p2, "Observed")$error_y$array) /
+                         unlist(tr(p2, "Predicted")$y)), tolerance = 1e-10)
+  expect_null(tr(plot_glm_predictor(mc, "R", data = d20, ratio = TRUE,
+                                    ci = FALSE), "A/E")$error_y$array)
+
+  # the reference line sits at 1 and spans the plotting area
+  sh <- plotly::plotly_build(p)$x$layout$shapes
+  expect_equal(length(sh), 1L)
+  expect_equal(c(sh[[1]]$y0, sh[[1]]$y1), c(1, 1))
+  expect_identical(sh[[1]]$xref, "paper")
+  expect_null(plotly::plotly_build(p2)$x$layout$shapes)
+
+  # in-sample a level in the model is pinned to 1 by the score equations
+  ae0 <- tr(plot_glm_predictor(mc, "R", ratio = TRUE), "A/E")
+  expect_equal(as.vector(unlist(ae0$y)), rep(1, 3), tolerance = 1e-8)
+
+  # labels and axis control follow the metric
+  expect_match(plotly::plotly_build(p)$x$layout$title$text, "A/E")
+  ytitle <- plotly::plotly_build(p)$x$layout$yaxis$title
+  expect_match(if (is.list(ytitle)) ytitle$text else ytitle, "A/E")
+  pr <- plotly::plotly_build(plot_glm_predictor(mc, "R", data = d20,
+                                                ratio = TRUE,
+                                                y_range = c(0.8, 1.3)))
+  expect_equal(pr$x$layout$yaxis$range, c(0.8, 1.3))
+
+  # continuous predictors and weighted models work the same way
+  expect_s3_class(plot_glm_predictor(mc, "LFT", data = d20, n_bins = 20,
+                                     ratio = TRUE), "plotly")
+  dsv <- d19[d19$AantalClaims > 0, ]
+  dsv$Avg <- rgamma(nrow(dsv), 3, scale = 700)
+  msv <- glm(Avg ~ R, Gamma("log"), dsv, weights = AantalClaims)
+  dsv2 <- dsv; dsv2$Avg <- dsv2$Avg * 1.2
+  a2 <- suppressWarnings(
+    tr(plot_glm_predictor(msv, "R", data = dsv2, ratio = TRUE), "A/E"))
+  hand2 <- tapply(seq_len(nrow(dsv2)), dsv2$R, function(i)
+    sum(dsv2$AantalClaims[i] * dsv2$Avg[i]) /
+      sum(dsv2$AantalClaims[i] * predict(msv, dsv2[i, ], type = "response")))
+  expect_equal(as.vector(unlist(a2$y)), as.vector(hand2[a2$x]),
+               tolerance = 1e-8)
+
+  expect_error(plot_glm_predictor(mc, "R", ratio = NA), "TRUE or FALSE")
+})

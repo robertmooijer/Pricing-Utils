@@ -349,7 +349,8 @@ plot_glm_predictor(model, predictor, data = NULL, n_bins = 150,
                    title = NULL, ylab = NULL, xlab = NULL,
                    metric_fmt = 4, bin_type = c("quantile", "width"),
                    exposure_col = "Exposure",
-                   ci = TRUE, ci_level = 0.95, y_range = NULL)
+                   ci = TRUE, ci_level = 0.95, y_range = NULL,
+                   ratio = FALSE)
 ```
 
 Mode is detected automatically:
@@ -386,6 +387,30 @@ link, so the two lines coincide by construction and tell you nothing. On
 other data nothing is pinned, and a gap is evidence that the level has
 moved. The dispersion behind the error bars still comes from the fitted
 model, because it is a property of the model and not of the period.
+
+**The A/E ratio itself.** `ratio = TRUE` replaces the two lines with their
+ratio: one A/E line and a dashed reference line at 1.
+
+```r
+plot_glm_predictor(m_freq, "REGIO", data = boekjaar_2025, ratio = TRUE)
+```
+
+Two lines show the **level**, which is the view you want when the question
+is how the risk runs across a variable. The ratio shows the **error**,
+which is the view you want when the question is where the tariff is off: a
+level sitting 10% low is obvious at 0.90, and barely visible when two
+lines nearly touch on an axis that spans the whole book. Counts give
+`Σy / Σμ` per bin, a weighted model the ratio of the two weighted means,
+so it is the same A/E that `plot_residual_heatmap()` colours per cell and
+`double_lift()` plots per bin. The error bars are the ones on the observed
+point divided by the prediction, so a bin whose band covers 1 is not
+evidence of anything.
+
+It only says something where observed and predicted are free to differ,
+which is the same caveat as above: use it on data the model never saw, on
+a variable outside the model, or per bin of a continuous variable. On a
+categorical term that is in the model, in-sample, it is a flat line at 1
+by construction.
 
 **More than one offset.** A model may carry a second, known relativity as
 an offset next to the exposure — a bonus-malus scale that is given rather
@@ -2167,7 +2192,8 @@ plot_glm_predictor(model, predictor, data = NULL,
                    weight_label = NULL, color = ta_year_palette(1),
                    color_pred = ta_gold, title = NULL, ylab = NULL,
                    xlab = NULL, metric_fmt = 4,
-                   bin_type = c("quantile", "width"), y_range = NULL)
+                   bin_type = c("quantile", "width"), y_range = NULL,
+                   ratio = FALSE)
 ```
 
 | Argument | Type | Default | Meaning |
@@ -2177,6 +2203,7 @@ plot_glm_predictor(model, predictor, data = NULL,
 | `weight_var` | character(1) or NULL | `NULL` | override the weight column (must exist in `model$data`, or in `data`) |
 | `bin_type` | character(1) | `"quantile"` | `"quantile"` = equal counts per bin; `"width"` = equal width |
 | `y_range` | numeric(2) or NULL | `NULL` | fix the primary axis, e.g. to compare predictors |
+| `ratio` | logical(1) | `FALSE` | `TRUE` = one A/E line with a reference line at 1, instead of two lines |
 
 **Algorithm.** Detect the mode (see [shared behaviour](#shared-behaviour));
 build a frame of predictor, observed, predicted and weight; group by the
@@ -2185,13 +2212,15 @@ against `Σpredicted / Σweight` in counts mode, or prior-weight-weighted
 means otherwise. A binned point is positioned at the weighted mean of its
 bin; an unbinned point at its exact value.
 
-**Returns.** A plotly object with weight bars, "Observed" and "Predicted".
+**Returns.** A plotly object with weight bars and either "Observed" and
+"Predicted", or, with `ratio = TRUE`, a single "A/E" line plus a reference
+line at 1.
 
 **Warnings.** An offset with a non-log link (falls back to prior weights).
 
 **Errors.** Not a `glm`; `n_bins < 2`; predictor not found; unknown
-`weight_var`; invalid `y_range`; `data` empty, missing a column the model
-needs, carrying a factor level the model never saw, or leaving no usable
+`weight_var`; invalid `y_range`; `ratio` not `TRUE`/`FALSE`; `data` empty,
+missing a column the model needs, carrying a factor level the model never saw, or leaving no usable
 row after missing values are dropped.
 
 **Cost.** One `predict()` over the model rows plus a group-by, O(n).

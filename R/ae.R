@@ -103,8 +103,29 @@
 #'   case the axis auto-scales to the observed/predicted values of this
 #'   plot only (plotly's default behaviour).
 #'
-#' @return A plotly object with weight bars, an "Observed" line and a
-#'   "Predicted" line.
+#' @param ratio `FALSE` (default) draws the observed and predicted series
+#'   as two lines. `TRUE` draws their ratio instead: one A/E line with a
+#'   dashed reference line at 1, which is the same quantity
+#'   [plot_residual_heatmap()] colours per cell and [double_lift()] plots
+#'   per bin. Counts give `sum(y) / sum(mu)` per bin, a weighted model the
+#'   ratio of the two weighted means.
+#'
+#'   Two lines show the level, which is what you want when the question is
+#'   how the risk runs across a variable. The ratio shows the error, which
+#'   is what you want when the question is where the tariff is off: a
+#'   level sitting 10% low is obvious at 0.90, and not obvious at all when
+#'   two lines nearly touch on an axis that spans the whole book. The
+#'   error bars are the ones on the observed point divided by the
+#'   prediction, so a bin whose band covers 1 is not evidence of anything.
+#'
+#'   It only says something where observed and predicted are free to
+#'   differ. In-sample, a categorical term that is in the model is pinned
+#'   to 1 at every level under a canonical link (see `ci`), so use it on
+#'   `data` the model never saw, on a variable outside the model, or per
+#'   bin of a continuous variable.
+#' @return A plotly object with weight bars and, with `ratio = FALSE`, an
+#'   "Observed" and a "Predicted" line; with `ratio = TRUE` a single "A/E"
+#'   line and a reference line at 1.
 #' @export
 plot_glm_predictor <- function(model, predictor,
                                data         = NULL,
@@ -118,10 +139,12 @@ plot_glm_predictor <- function(model, predictor,
                                bin_type = c("quantile", "width"),
                                exposure_col = "Exposure",
                                ci = TRUE, ci_level = 0.95,
-                               y_range = NULL) {
+                               y_range = NULL, ratio = FALSE) {
 
   bin_type <- match.arg(bin_type)
   if (!inherits(model, "glm")) stop("'model' must be a glm object.")
+  if (!is.logical(ratio) || length(ratio) != 1 || is.na(ratio))
+    stop("plot_glm_predictor: 'ratio' must be TRUE or FALSE.", call. = FALSE)
   if (n_bins < 2) stop("plot_glm_predictor: 'n_bins' must be at least 2.")
   if (!is.numeric(ci_level) || length(ci_level) != 1 ||
       ci_level <= 0 || ci_level >= 1)
@@ -292,8 +315,25 @@ plot_glm_predictor <- function(model, predictor,
 
   scatter_mode <- if (x_is_numeric) "lines+markers" else "markers"
 
+  # The ratio of the two series, which is the same A/E the heatmap and the
+  # lift report: counts give sum(y) / sum(mu), a weighted model the ratio
+  # of the two weighted means, which is sum(w y) / sum(w mu). A bin whose
+  # prediction is zero has no ratio to show rather than an infinite one.
+  if (ratio) {
+    agg$ae    <- ifelse(agg$avg_predicted > 0,
+                        agg$avg_observed / agg$avg_predicted, NA_real_)
+    # The interval is the one on the observed point, carried through the
+    # division: the predicted value is the model, so it scales the bar
+    # rather than widening it. The band therefore says whether this bin's
+    # distance from 1 is bigger than the noise it carries.
+    agg$se_ae <- ifelse(agg$avg_predicted > 0,
+                        agg$se_observed / agg$avg_predicted, NA_real_)
+  }
+
   # Labels
-  default_metric <- if (use_rate) "Frequency" else paste("Avg.", response_name)
+  default_metric <- if (ratio) "A/E"
+                    else if (use_rate) "Frequency"
+                    else paste("Avg.", response_name)
   if (is.null(title)) title <- paste(default_metric, "\u2013", predictor)
   if (is.null(xlab))  xlab  <- predictor
   if (is.null(ylab))  ylab  <- default_metric
@@ -318,30 +358,51 @@ plot_glm_predictor <- function(model, predictor,
   # Error bars on the observed points, so a gap between the two lines can
   # be read against the noise the bin actually carries. Thin bins get long
   # bars, which is the honest picture: they were never evidence.
+  se_plot <- if (ratio) agg$se_ae else agg$se_observed
   err_cfg <- if (isTRUE(ci)) list(
-    type = "data", array = agg$se_observed * stats::qnorm(1 - (1 - ci_level) / 2),
+    type = "data", array = se_plot * stats::qnorm(1 - (1 - ci_level) / 2),
     color = color, thickness = 1.2, width = 3) else NULL
 
-  p <- p %>% add_trace(
-    y = ~avg_observed, name = "Observed", yaxis = "y",
-    type = "scatter", mode = scatter_mode, error_y = err_cfg,
-    line   = list(color = color, width = 2.2),
-    marker = list(color = color, size = 7),
-    hovertemplate = paste0("<b>", xlab, ":</b> %{x}",
-                           "<br><b>Observed:</b> %{y:.", metric_fmt, "f}<extra></extra>")
-  )
+  if (ratio) {
+    p <- p %>% add_trace(
+      y = ~ae, name = "A/E", yaxis = "y",
+      type = "scatter", mode = scatter_mode, error_y = err_cfg,
+      line   = list(color = color, width = 2.2),
+      marker = list(color = color, size = 7),
+      hovertemplate = paste0("<b>", xlab, ":</b> %{x}",
+                             "<br><b>A/E:</b> %{y:.", metric_fmt, "f}<extra></extra>")
+    )
+  } else {
+    p <- p %>% add_trace(
+      y = ~avg_observed, name = "Observed", yaxis = "y",
+      type = "scatter", mode = scatter_mode, error_y = err_cfg,
+      line   = list(color = color, width = 2.2),
+      marker = list(color = color, size = 7),
+      hovertemplate = paste0("<b>", xlab, ":</b> %{x}",
+                             "<br><b>Observed:</b> %{y:.", metric_fmt, "f}<extra></extra>")
+    )
 
-  p <- p %>% add_trace(
-    y = ~avg_predicted, name = "Predicted", yaxis = "y",
-    type = "scatter", mode = scatter_mode,
-    line   = list(color = color_pred, width = 2, dash = "dash"),
-    marker = list(color = color_pred, size = 6, symbol = "diamond"),
-    hovertemplate = paste0("<b>", xlab, ":</b> %{x}",
-                           "<br><b>Predicted:</b> %{y:.", metric_fmt, "f}<extra></extra>")
-  )
+    p <- p %>% add_trace(
+      y = ~avg_predicted, name = "Predicted", yaxis = "y",
+      type = "scatter", mode = scatter_mode,
+      line   = list(color = color_pred, width = 2, dash = "dash"),
+      marker = list(color = color_pred, size = 6, symbol = "diamond"),
+      hovertemplate = paste0("<b>", xlab, ":</b> %{x}",
+                             "<br><b>Predicted:</b> %{y:.", metric_fmt, "f}<extra></extra>")
+    )
+  }
+
+  # The line the whole chart is read against. Drawn across the plotting
+  # area rather than as a trace, so it needs no x values of its own and
+  # stays put for a categorical axis as well.
+  ref_line <- if (ratio) list(list(
+    type = "line", xref = "paper", x0 = 0, x1 = 1, yref = "y", y0 = 1, y1 = 1,
+    line = list(color = ta_gold, width = 2, dash = "dash"), layer = "below"))
+    else NULL
 
   p %>%
     layout(
+      shapes = ref_line,
       title  = list(text = title, font = list(color = ta_navy, size = 14)),
       xaxis  = xaxis_cfg,
       yaxis  = list(title = ylab, gridcolor = "#D0D8E0", zeroline = FALSE,

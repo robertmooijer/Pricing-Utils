@@ -21,7 +21,8 @@ plot_glm_predictor(
   exposure_col = "Exposure",
   ci = TRUE,
   ci_level = 0.95,
-  y_range = NULL
+  y_range = NULL,
+  ratio = FALSE
 )
 }
 \arguments{
@@ -122,10 +123,32 @@ e.g. to make multiple \code{plot_glm_predictor()} calls for different
 predictors visually comparable. Left \code{NULL} by default, in which
 case the axis auto-scales to the observed/predicted values of this
 plot only (plotly's default behaviour).}
+
+\item{ratio}{\code{FALSE} (default) draws the observed and predicted series
+as two lines. \code{TRUE} draws their ratio instead: one A/E line with a
+dashed reference line at 1, which is the same quantity
+\code{\link[=plot_residual_heatmap]{plot_residual_heatmap()}} colours per cell and \code{\link[=double_lift]{double_lift()}} plots
+per bin. Counts give \code{sum(y) / sum(mu)} per bin, a weighted model the
+ratio of the two weighted means.
+
+Two lines show the level, which is what you want when the question is
+how the risk runs across a variable. The ratio shows the error, which
+is what you want when the question is where the tariff is off: a
+level sitting 10\% low is obvious at 0.90, and not obvious at all when
+two lines nearly touch on an axis that spans the whole book. The
+error bars are the ones on the observed point divided by the
+prediction, so a bin whose band covers 1 is not evidence of anything.
+
+It only says something where observed and predicted are free to
+differ. In-sample, a categorical term that is in the model is pinned
+to 1 at every level under a canonical link (see \code{ci}), so use it on
+\code{data} the model never saw, on a variable outside the model, or per
+bin of a continuous variable.}
 }
 \value{
-A plotly object with weight bars, an "Observed" line and a
-"Predicted" line.
+A plotly object with weight bars and, with \code{ratio = FALSE}, an
+"Observed" and a "Predicted" line; with \code{ratio = TRUE} a single "A/E"
+line and a reference line at 1.
 }
 \description{
 Compares observed and predicted values of a fitted glm per (binned) level
