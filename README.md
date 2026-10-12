@@ -932,50 +932,242 @@ gets a warning. Variables you do not name keep the default above.
 
 #### One rating factor, two columns
 
-A severity model often uses a regrouped version of a frequency variable:
-urbanisation 1 to 5 in the frequency model, and 1, 2, 3, 4-5 in the
-severity model because the top two classes showed the same average claim.
-The two models then name different columns for one tariff field.
+A severity model often uses a regrouped version of a frequency variable.
+Urbanisation runs 1 to 5 in the frequency model, but the severity showed
+no difference between the top two classes, so there the column is 1, 2, 3,
+4-5. The two models now name different columns for one tariff field, and
+the table has to be told that they are one, or it reports both.
 
-Left alone, the table is still **correct but awkward**: it holds two
-blocks, `Stedelijkheid` with the frequency factors and a severity factor
-of 1 everywhere, and `Stedelijkheid_groep` the other way round. Both have
-to be applied to arrive at the premium, so anyone who implements the
-tariff from the `Stedelijkheid` sheet alone silently drops the severity
-effect. The table says so in a warning when it spots the relation.
+Everything below is one worked example you can paste and run.
 
-`merge_vars` declares it, and the table reports one block on the column a
-policy actually carries:
+```r
+library(pricingtoolsRmO)
+
+set.seed(7)
+n <- 30000
+dat <- data.frame(
+  Stedelijkheid = factor(sample(1:5, n, TRUE)),
+  LEEFTIJD      = round(runif(n, 18, 80)),
+  Exposure      = round(runif(n, .3, 1), 3))
+
+# the regrouped column: 4 and 5 together
+dat$Stedelijkheid_groep <- factor(
+  ifelse(dat$Stedelijkheid %in% c("4", "5"), "4-5",
+         as.character(dat$Stedelijkheid)))
+
+dat$AantalClaims <- rpois(n, dat$Exposure *
+  exp(-2.2 + .15 * as.numeric(as.character(dat$Stedelijkheid))))
+dat$SCHADELAST <- ifelse(dat$AantalClaims > 0,
+  dat$AantalClaims * rgamma(n, 3, scale = 600 *
+    ifelse(dat$Stedelijkheid_groep == "4-5", 1.25, 1)), 0)
+
+m_freq <- glm(AantalClaims ~ Stedelijkheid + LEEFTIJD + offset(log(Exposure)),
+              poisson(), dat)
+
+d_sev <- dat[dat$AantalClaims > 0, ]
+d_sev$AvgLoss <- d_sev$SCHADELAST / d_sev$AantalClaims
+m_sev <- glm(AvgLoss ~ Stedelijkheid_groep, Gamma("log"), d_sev,
+             weights = AantalClaims)
+```
+
+##### 1. What you get without `merge_vars`
+
+```r
+tbl0 <- make_rating_table(m_freq, m_sev, data = dat)
+```
+
+```
+Warning: one column looks like a regrouping of another, each used by one of
+the two models, so the table holds two blocks for what is one tariff field.
+If that is what they are, pass
+merge_vars = list(Stedelijkheid = "Stedelijkheid_groep").
+```
+
+| Variable | Level | Exposure | ClaimCount | Factor_Frequency | Factor_Severity |
+|---|---|---|---|---|---|
+| Stedelijkheid | 1 | 3890.8 | 510 | 1.000000 | 1.000000 |
+| Stedelijkheid | 2 | 3898.2 | 569 | 1.113466 | 1.000000 |
+| Stedelijkheid | 3 | 3878.4 | 657 | 1.292090 | 1.000000 |
+| Stedelijkheid | 4 | 3874.2 | 770 | 1.516372 | 1.000000 |
+| Stedelijkheid | 5 | 3898.2 | 894 | 1.749688 | 1.000000 |
+| Stedelijkheid_groep | 1 | 3890.8 | 510 | 1.000000 | 1.000000 |
+| Stedelijkheid_groep | 2 | 3898.2 | 569 | 1.000000 | 1.030413 |
+| Stedelijkheid_groep | 3 | 3878.4 | 657 | 1.000000 | 1.084109 |
+| Stedelijkheid_groep | 4-5 | 7772.4 | 1664 | 1.000000 | 1.259947 |
+
+The table is **correct but awkward**. A variable a model does not use gets
+a neutral factor of 1 there, so the frequency effect sits in one block and
+the severity effect in the other, and a premium needs both. Whoever builds
+the tariff from the `Stedelijkheid` block alone drops the severity effect
+with nothing to show that something is missing. That is what the warning
+is for: it fires when one column is a regrouping of another and each is
+used by one of the two models.
+
+##### 2. The same tariff with `merge_vars`
+
+```r
+tbl <- make_rating_table(m_freq, m_sev, data = dat,
+                         merge_vars = list(Stedelijkheid = "Stedelijkheid_groep"))
+```
+
+| Level | Exposure | ClaimCount | Factor_Frequency | Factor_Severity | Factor_Premium |
+|---|---|---|---|---|---|
+| 1 | 3890.8 | 510 | 1.000000 | 1.000000 | 1.000000 |
+| 2 | 3898.2 | 569 | 1.113466 | 1.030413 | 1.147330 |
+| 3 | 3878.4 | 657 | 1.292090 | 1.084109 | 1.400767 |
+| 4 | 3874.2 | 770 | 1.516372 | 1.259947 | 1.910549 |
+| 5 | 3898.2 | 894 | 1.749688 | 1.259947 | 2.204515 |
+
+One block, on the five levels a policy actually carries. Levels 4 and 5
+carry the severity factor of the group they fall in, the frequency factors
+are untouched, and the exposure and claim counts stay on the real levels
+rather than on the grouped ones. The lookup runs on the column that is in
+the policy record, so nothing has to be mapped by hand.
+
+##### 3. A premium, and what the two-block version costs you
+
+```r
+fac <- function(t, v, l) {
+  s <- t[t$Variable == v & is.na(t$Group), ]
+  s$Factor_Premium[match(l, s$Level)]
+}
+i <- attr(tbl, "intercept_premium")
+i * fac(tbl, "Stedelijkheid", "5") * fac(tbl, "LEEFTIJD", "40")
+```
+
+```
+intercept                   : 228.67
+x Stedelijkheid 5           : 2.2045
+x LEEFTIJD 40               : 1.0042
+= premium                   : 506.20
+straight from the models    : 506.20
+```
+
+Take the same policy from the two-block table and use the `Stedelijkheid`
+block only, and you get **401.76**: 20.6% too low, because the severity
+loading of group 4-5 lived in the other block. The two-block table is not
+wrong, it just has to be looked up twice:
+
+```r
+# correct from tbl0, but it needs both blocks
+attr(tbl0, "intercept_premium") *
+  fac(tbl0, "Stedelijkheid", "5") *
+  fac(tbl0, "Stedelijkheid_groep", "4-5") *
+  fac(tbl0, "LEEFTIJD", "40")
+#> 506.20
+```
+
+##### 4. Choosing the base: both columns move together
+
+```r
+tbl5 <- make_rating_table(m_freq, m_sev, data = dat,
+                          merge_vars = list(Stedelijkheid = "Stedelijkheid_groep"),
+                          base = list(Stedelijkheid = "5"))
+```
+
+| Level | IsBase | Factor_Frequency | Factor_Severity | Factor_Premium |
+|---|---|---|---|---|
+| 1 | FALSE | 0.5715303 | 0.7936840 | 0.4536145 |
+| 2 | FALSE | 0.6363797 | 0.8178223 | 0.5204455 |
+| 3 | FALSE | 0.7384685 | 0.8604403 | 0.6354081 |
+| 4 | FALSE | 0.8666526 | 1.0000000 | 0.8666526 |
+| 5 | TRUE | 1.0000000 | 1.0000000 | 1.0000000 |
+
+Level 4 has a severity factor of exactly 1, because it sits in the same
+group as the base. The base row stays a policy that could exist: asking
+for urbanisation 5 puts the regrouped column at 4-5 by itself. The same
+policy as in step 3 still costs 506.20, as it must, since the base only
+moves the factors and the intercept against each other.
+
+Naming the regrouped column in `base` is refused, because after merging it
+has no block of its own to be the base of.
+
+##### 5. A band of a continuous variable
+
+The same thing happens when the frequency model uses an age and the
+severity model an age class.
+
+```r
+dat$LEEFTIJD_KL <- cut(dat$LEEFTIJD, c(17, 30, 50, 80),
+                       labels = c("18-30", "31-50", "51-80"))
+d2 <- dat[dat$AantalClaims > 0, ]
+d2$AvgLoss <- d2$SCHADELAST / d2$AantalClaims
+
+m_f2 <- glm(AantalClaims ~ ns(LEEFTIJD, 4) + offset(log(Exposure)),
+            poisson(), dat)
+m_s2 <- glm(AvgLoss ~ LEEFTIJD_KL, Gamma("log"), d2, weights = AantalClaims)
+
+make_rating_table(m_f2, m_s2, data = dat,
+                  merge_vars = list(LEEFTIJD = "LEEFTIJD_KL"),
+                  grid_step = c(LEEFTIJD = 10))
+```
+
+| Level | Factor_Frequency | Factor_Severity | Band it falls in |
+|---|---|---|---|
+| 20 | 1.0098925 | 1.0061867 | 18-30 |
+| 30 | 0.9366520 | 1.0061867 | 18-30 |
+| 40 | 0.9572137 | 1.0000000 | 31-50 |
+| 50 | 1.0000000 | 1.0000000 | 31-50 |
+| 60 | 0.9655736 | 0.9749595 | 51-80 |
+| 70 | 0.9397338 | 0.9749595 | 51-80 |
+| 80 | 0.9576490 | 0.9749595 | 51-80 |
+
+The frequency factor runs per 10 years off the spline, the severity factor
+steps per band. A grid point that does not occur in the data takes the
+band of the nearest age that does, which is the band it falls in, because
+a band covers a run of neighbouring values. The boundaries come out right:
+30 is still in 18-30, and 40 and 50 are in 31-50.
+
+##### 6. What is refused
+
+The relation has to be a function of the variable: every value maps to
+exactly one group. That is checked against `data`, so a column that is not
+a regrouping is refused instead of half applied.
 
 ```r
 make_rating_table(m_freq, m_sev, data = dat,
-                  merge_vars = list(Stedelijkheid = "Stedelijkheid_groep"))
+                  merge_vars = list(Stedelijkheid = "LEEFTIJD"))
+#> Error: 'LEEFTIJD' is not a regrouping of 'Stedelijkheid': the value(s)
+#>        2, 3, 4, 1, 5 of 'Stedelijkheid' occur with more than one value of
+#>        'LEEFTIJD', so no single factor belongs to them.
+
+make_rating_table(m_freq, m_sev, data = dat,
+                  merge_vars = list(Stedelijkheid = "Stedelijkheid_groep"),
+                  base = list(Stedelijkheid_groep = "4-5"))
+#> Error: 'Stedelijkheid_groep' is merged into 'Stedelijkheid'; set the base
+#>        on that variable instead.
 ```
 
-The block then reads like this (numbers from a 40,000-policy example):
+A declaration that neither model uses raises a warning rather than
+changing nothing in silence, and so does a column that does not exist.
 
-| Level | Factor_Frequency | Factor_Severity | Factor_Premium |
-|---|---|---|---|
-| 1 | 1.000 | 1.000 | 1.000 |
-| 2 | 1.369 | 0.976 | 1.336 |
-| 3 | 1.591 | 0.993 | 1.580 |
-| 4 | 1.666 | 1.199 | 1.998 |
-| 5 | 1.981 | 1.199 | 2.376 |
+##### 7. The export
 
-Levels 4 and 5 share the severity factor of the group they fall in, the
-frequency factors are untouched, and the exposure stays on the five real
-levels. `export_rating_table()` then writes one sheet and one lookup key
-per tariff field instead of two.
+```r
+export_rating_table(tbl,  "tariff.xlsx")
+export_rating_table(tbl0, "tariff_two_blocks.xlsx")
+```
 
-The regrouped column must be a function of the one it regroups: every
-value maps to exactly one group, which is checked against `data`, and a
-column that fails the check is refused rather than half applied. A band of
-a continuous variable works the same way (`list(LEEFTIJD =
-"LEEFTIJD_KLASSE")`); a grid point that does not occur in the data takes
-the band of the nearest value that does. The merged column keeps no block
-of its own, cannot be named in `base` (set the base on the variable it is
-merged into, and both move together), and an interaction on it is
-reported under the name of the variable it is merged into.
+```
+with merge_vars : Overview, Tariff, Stedelijkheid, LEEFTIJD
+without         : Overview, Tariff, Stedelijkheid, LEEFTIJD, Stedelijkheid_groep
+```
+
+One sheet and one lookup key (`Stedelijkheid|5`) per tariff field, instead
+of two keys that both have to be applied.
+
+##### The rules in short
+
+- Keyed by the variable to keep: `list(Stedelijkheid = "Stedelijkheid_groep")`.
+  A named vector works too, and one variable may have several regrouped
+  columns.
+- The regrouped column must be a function of the variable it regroups,
+  which is checked against `data`.
+- It keeps no block of its own, cannot be named in `base`, and an
+  interaction on it is reported under the name of the variable it is merged
+  into.
+- Nothing about the models changes. Nothing is refitted and every premium
+  is the same before and after; only the shape of the table changes.
 
 ```r
 make_rating_table(model_freq = NULL, model_sev = NULL, data,
