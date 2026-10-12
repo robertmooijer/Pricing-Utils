@@ -323,3 +323,212 @@ test_that("a wrong base is refused or reported", {
   expect_warning(make_rating_table(mb, NULL, data = db, base = list(LEEFTIJD = 120)),
                  "outside the data")
 })
+
+test_that("two columns for one rating factor can be merged into one block", {
+  set.seed(93)
+  nm <- 30000
+  dm <- data.frame(
+    Stedelijkheid = factor(sample(1:5, nm, TRUE)),
+    LEEFTIJD      = round(runif(nm, 18, 80)),
+    Exposure      = round(runif(nm, .3, 1), 3))
+  dm$Sted_groep <- factor(ifelse(dm$Stedelijkheid %in% c("4", "5"), "4-5",
+                                 as.character(dm$Stedelijkheid)))
+  dm$AantalClaims <- rpois(nm, dm$Exposure *
+    exp(-2.2 + .15 * as.numeric(as.character(dm$Stedelijkheid))))
+  dm$SCHADELAST <- ifelse(dm$AantalClaims > 0,
+    dm$AantalClaims * rgamma(nm, 3, scale = 600 *
+      ifelse(dm$Sted_groep == "4-5", 1.25, 1)), 0)
+  mf <- glm(AantalClaims ~ Stedelijkheid + LEEFTIJD + offset(log(Exposure)),
+            poisson(), dm)
+  ds <- dm[dm$AantalClaims > 0, ]
+  ds$AvgLoss <- ds$SCHADELAST / ds$AantalClaims
+  ms <- glm(AvgLoss ~ Sted_groep, Gamma("log"), ds, weights = AantalClaims)
+  mv <- list(Stedelijkheid = "Sted_groep")
+
+  # undeclared: two blocks, each padded with neutral factors, and a hint
+  expect_warning(t0 <- make_rating_table(mf, ms, data = dm),
+                 "regrouping of another")
+  expect_true(all(c("Stedelijkheid", "Sted_groep") %in% t0$Variable))
+  expect_equal(t0$Factor_Severity[t0$Variable == "Stedelijkheid"], rep(1, 5))
+
+  t1 <- make_rating_table(mf, ms, data = dm, merge_vars = mv)
+  expect_false("Sted_groep" %in% t1$Variable)
+  s1 <- t1[t1$Variable == "Stedelijkheid", ]
+  expect_equal(nrow(s1), 5)
+  # each level carries the severity factor of the group it falls in
+  expect_equal(s1$Factor_Severity[s1$Level == "4"],
+               s1$Factor_Severity[s1$Level == "5"])
+  expect_equal(s1$Factor_Severity[s1$Level %in% c("4", "5")],
+               rep(t0$Factor_Severity[t0$Variable == "Sted_groep" &
+                                      t0$Level == "4-5"], 2))
+  # and the frequency factor is untouched
+  expect_equal(s1$Factor_Frequency,
+               t0$Factor_Frequency[t0$Variable == "Stedelijkheid"])
+  # volumes stay on the levels of the column a policy carries
+  expect_equal(s1$Exposure,
+               as.vector(tapply(dm$Exposure, dm$Stedelijkheid, sum)))
+
+  # one block, one lookup, and the premium still reconstructs exactly
+  nd <- data.frame(Stedelijkheid = factor("5", levels(dm$Stedelijkheid)),
+                   Sted_groep = factor("4-5", levels(dm$Sted_groep)),
+                   LEEFTIJD = 40, Exposure = 1, AantalClaims = 1)
+  prem <- function(t) {
+    f <- function(v, l) {
+      s <- t[t$Variable == v & is.na(t$Group), ]
+      s$Factor_Premium[match(l, s$Level)]
+    }
+    attr(t, "intercept_premium") * f("Stedelijkheid", "5") * f("LEEFTIJD", "40")
+  }
+  direct <- as.numeric(predict(mf, nd, type = "response") *
+                       predict(ms, nd, type = "response"))
+  expect_equal(prem(t1), direct, tolerance = 1e-10)
+  # the undeclared table needs both blocks to get there, the merged one does not
+  expect_equal(prem(t0) * t0$Factor_Premium[t0$Variable == "Sted_groep" &
+                                            t0$Level == "4-5"],
+               direct, tolerance = 1e-10)
+
+  # a chosen base moves both columns, so the base row stays a real policy
+  t2 <- make_rating_table(mf, ms, data = dm, merge_vars = mv,
+                          base = list(Stedelijkheid = "5"))
+  b2 <- t2[t2$Variable == "Stedelijkheid" & t2$IsBase, ]
+  expect_identical(b2$Level, "5")
+  expect_equal(c(b2$Factor_Frequency, b2$Factor_Severity), c(1, 1))
+  # the intercept is that base policy: urbanisation 5 at the base age
+  nd_b <- nd
+  nd_b$LEEFTIJD <- attr(t2, "base_values")$LEEFTIJD
+  expect_equal(attr(t2, "intercept_premium"),
+               as.numeric(predict(mf, nd_b, type = "response") *
+                          predict(ms, nd_b, type = "response")),
+               tolerance = 1e-10)
+  # and every premium is unchanged by that choice
+  nd2 <- nd
+  nd2$Stedelijkheid <- factor("2", levels(dm$Stedelijkheid))
+  nd2$Sted_groep    <- factor("2", levels(dm$Sted_groep))
+  p2 <- function(t) {
+    f <- function(v, l) {
+      s <- t[t$Variable == v & is.na(t$Group), ]
+      s$Factor_Premium[match(l, s$Level)]
+    }
+    attr(t, "intercept_premium") * f("Stedelijkheid", "2") * f("LEEFTIJD", "40")
+  }
+  expect_equal(p2(t1), p2(t2), tolerance = 1e-10)
+  expect_equal(p2(t2), as.numeric(predict(mf, nd2, type = "response") *
+                                  predict(ms, nd2, type = "response")),
+               tolerance = 1e-10)
+
+  # a named vector is accepted as well
+  expect_equal(make_rating_table(mf, ms, data = dm,
+                                 merge_vars = c(Stedelijkheid = "Sted_groep")),
+               t1)
+
+  # the export writes one sheet for the merged variable, not two
+  skip_if_not_installed("openxlsx")
+  fp <- file.path(tempdir(), "merged.xlsx")
+  export_rating_table(t1, fp)
+  expect_true("Stedelijkheid" %in% openxlsx::getSheetNames(fp))
+  expect_false("Sted_groep" %in% openxlsx::getSheetNames(fp))
+})
+
+test_that("a band of a continuous variable can be merged into it", {
+  set.seed(94)
+  nm <- 20000
+  dm <- data.frame(LEEFTIJD = round(runif(nm, 18, 80)),
+                   Exposure = round(runif(nm, .3, 1), 3))
+  dm$LEEFTIJD_KL <- cut(dm$LEEFTIJD, c(17, 30, 50, 80),
+                        labels = c("18-30", "31-50", "51-80"))
+  dm$AantalClaims <- rpois(nm, dm$Exposure * .2)
+  dm$SCHADELAST <- ifelse(dm$AantalClaims > 0,
+    dm$AantalClaims * rgamma(nm, 3, scale = 600 *
+      ifelse(dm$LEEFTIJD_KL == "18-30", 1.3, 1)), 0)
+  mf <- glm(AantalClaims ~ LEEFTIJD + offset(log(Exposure)), poisson(), dm)
+  ds <- dm[dm$AantalClaims > 0, ]
+  ds$AvgLoss <- ds$SCHADELAST / ds$AantalClaims
+  ms <- glm(AvgLoss ~ LEEFTIJD_KL, Gamma("log"), ds, weights = AantalClaims)
+
+  t1 <- make_rating_table(mf, ms, data = dm,
+                          merge_vars = list(LEEFTIJD = "LEEFTIJD_KL"),
+                          grid_step = c(LEEFTIJD = 5))
+  s <- t1[t1$Variable == "LEEFTIJD", ]
+  expect_false("LEEFTIJD_KL" %in% t1$Variable)
+  # a grid point takes the band it falls in, including the band edges
+  band <- function(age) s$Factor_Severity[s$LevelNum == age]
+  expect_equal(band(20), band(30))              # both in 18-30
+  expect_equal(band(35), band(50))              # both in 31-50
+  expect_equal(band(55), band(80))              # both in 51-80
+  expect_false(isTRUE(all.equal(band(30), band(35))))
+  nd <- data.frame(LEEFTIJD = 55,
+                   LEEFTIJD_KL = factor("51-80", levels(dm$LEEFTIJD_KL)),
+                   Exposure = 1, AantalClaims = 1)
+  f <- function(v, l) {
+    ss <- t1[t1$Variable == v & is.na(t1$Group), ]
+    ss$Factor_Premium[match(l, ss$Level)]
+  }
+  expect_equal(attr(t1, "intercept_premium") * f("LEEFTIJD", "55"),
+               as.numeric(predict(mf, nd, type = "response") *
+                          predict(ms, nd, type = "response")),
+               tolerance = 1e-10)
+})
+
+test_that("an interaction on a merged column is reported under one name", {
+  set.seed(95)
+  nm <- 25000
+  dm <- data.frame(Sted = factor(sample(1:4, nm, TRUE)),
+                   REGIO = factor(sample(c("Noord", "Zuid"), nm, TRUE)),
+                   Exposure = round(runif(nm, .3, 1), 3))
+  dm$Sted_groep <- factor(ifelse(dm$Sted %in% c("3", "4"), "3-4",
+                                 as.character(dm$Sted)))
+  dm$AantalClaims <- rpois(nm, dm$Exposure * .2)
+  dm$SCHADELAST <- ifelse(dm$AantalClaims > 0,
+                          dm$AantalClaims * rgamma(nm, 3, scale = 600), 0)
+  mf <- glm(AantalClaims ~ Sted + REGIO + offset(log(Exposure)), poisson(), dm)
+  ds <- dm[dm$AantalClaims > 0, ]
+  ds$AvgLoss <- ds$SCHADELAST / ds$AantalClaims
+  ms <- glm(AvgLoss ~ Sted_groep * REGIO, Gamma("log"), ds,
+            weights = AantalClaims)
+
+  t1 <- make_rating_table(mf, ms, data = dm,
+                          merge_vars = list(Sted = "Sted_groep"))
+  expect_false(any(grepl("Sted_groep", t1$Variable)))
+  int <- t1[!is.na(t1$Group), ]
+  expect_gt(nrow(int), 0)
+  expect_identical(unique(int$Variable), "Sted:REGIO")
+  # the interaction runs over the four levels of the finer column
+  expect_setequal(unique(int$Level), levels(dm$Sted))
+  expect_equal(int$Factor_Frequency[int$IsBase], 1)
+  # the two grouped levels share the severity relativity
+  sv <- function(l, g) int$Factor_Severity[int$Level == l & int$Group == g]
+  expect_equal(sv("3", "Zuid"), sv("4", "Zuid"))
+})
+
+test_that("a merge declaration that cannot hold is refused", {
+  set.seed(96)
+  nm <- 5000
+  dm <- data.frame(A = factor(sample(1:4, nm, TRUE)),
+                   B = factor(sample(c("x", "y"), nm, TRUE)),
+                   Exposure = runif(nm, .3, 1))
+  dm$AantalClaims <- rpois(nm, dm$Exposure * .2)
+  dm$A_groep <- factor(ifelse(dm$A %in% c("3", "4"), "3-4", as.character(dm$A)))
+  mf <- glm(AantalClaims ~ A + offset(log(Exposure)), poisson(), dm)
+
+  expect_error(make_rating_table(mf, NULL, data = dm,
+                                 merge_vars = list(A = "B")),
+               "not a regrouping")
+  expect_error(make_rating_table(mf, NULL, data = dm,
+                                 merge_vars = list(A = "A")),
+               "onto itself")
+  expect_error(make_rating_table(mf, NULL, data = dm,
+                                 merge_vars = list(A = "A_group")),
+               "not found in the data")
+  expect_error(make_rating_table(mf, NULL, data = dm,
+                                 merge_vars = list(A = "A_groep",
+                                                   B = "A_groep")),
+               "regrouping of both")
+  expect_error(make_rating_table(mf, NULL, data = dm,
+                                 merge_vars = list("A_groep")),
+               "must be named")
+  # a valid relation on columns no model uses changes nothing, and says so
+  dm$B_alles <- factor("alles")
+  expect_warning(make_rating_table(mf, NULL, data = dm,
+                                   merge_vars = list(B = "B_alles")),
+                 "neither model uses")
+})

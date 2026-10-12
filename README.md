@@ -930,13 +930,61 @@ A categorical base must be an existing level. A continuous base is used
 exactly as given, even between grid points, and a value outside the data
 gets a warning. Variables you do not name keep the default above.
 
+#### One rating factor, two columns
+
+A severity model often uses a regrouped version of a frequency variable:
+urbanisation 1 to 5 in the frequency model, and 1, 2, 3, 4-5 in the
+severity model because the top two classes showed the same average claim.
+The two models then name different columns for one tariff field.
+
+Left alone, the table is still **correct but awkward**: it holds two
+blocks, `Stedelijkheid` with the frequency factors and a severity factor
+of 1 everywhere, and `Stedelijkheid_groep` the other way round. Both have
+to be applied to arrive at the premium, so anyone who implements the
+tariff from the `Stedelijkheid` sheet alone silently drops the severity
+effect. The table says so in a warning when it spots the relation.
+
+`merge_vars` declares it, and the table reports one block on the column a
+policy actually carries:
+
+```r
+make_rating_table(m_freq, m_sev, data = dat,
+                  merge_vars = list(Stedelijkheid = "Stedelijkheid_groep"))
+```
+
+The block then reads like this (numbers from a 40,000-policy example):
+
+| Level | Factor_Frequency | Factor_Severity | Factor_Premium |
+|---|---|---|---|
+| 1 | 1.000 | 1.000 | 1.000 |
+| 2 | 1.369 | 0.976 | 1.336 |
+| 3 | 1.591 | 0.993 | 1.580 |
+| 4 | 1.666 | 1.199 | 1.998 |
+| 5 | 1.981 | 1.199 | 2.376 |
+
+Levels 4 and 5 share the severity factor of the group they fall in, the
+frequency factors are untouched, and the exposure stays on the five real
+levels. `export_rating_table()` then writes one sheet and one lookup key
+per tariff field instead of two.
+
+The regrouped column must be a function of the one it regroups: every
+value maps to exactly one group, which is checked against `data`, and a
+column that fails the check is refused rather than half applied. A band of
+a continuous variable works the same way (`list(LEEFTIJD =
+"LEEFTIJD_KLASSE")`); a grid point that does not occur in the data takes
+the band of the nearest value that does. The merged column keeps no block
+of its own, cannot be named in `base` (set the base on the variable it is
+merged into, and both move together), and an interaction on it is
+reported under the name of the variable it is merged into.
+
 ```r
 make_rating_table(model_freq = NULL, model_sev = NULL, data,
                   grid_res = 50,
                   exposure_col = "Exposure", claims_col = "AantalClaims",
                   base_level = c("first", "exposure"),
                   trim = c(0, 1),
-                  min_claims = 30, grid_step = NULL, base = NULL)
+                  min_claims = 30, grid_step = NULL, base = NULL,
+                  merge_vars = NULL)
 ```
 
 | Argument | Description |
@@ -949,6 +997,7 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
 | `trim` | quantile range for continuous grids, e.g. `c(0.005, 0.995)` to avoid outlier tails and spline extrapolation |
 | `min_claims` | thin-cell threshold: levels with fewer claims get `IsThin = TRUE` (categorical thin levels also raise a warning) |
 | `base` | your own base per variable, e.g. `list(REGIO = "Zuid", LEEFTIJD = 40)`; `NULL` keeps the default base |
+| `merge_vars` | two columns that are one rating factor, e.g. `list(Stedelijkheid = "Stedelijkheid_groep")`; see [One rating factor, two columns](#one-rating-factor-two-columns) |
 
 **Returns** a data.frame with one row per level/grid point per variable:
 
@@ -2745,7 +2794,7 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
                   claims_col = "AantalClaims",
                   base_level = c("first", "exposure"),
                   trim = c(0, 1), min_claims = 30, grid_step = NULL,
-                  base = NULL)
+                  base = NULL, merge_vars = NULL)
 ```
 
 | Argument | Type | Default | Meaning |
@@ -2755,6 +2804,7 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
 | `min_claims` | integer | `30` | thin-cell threshold for `IsThin` |
 | `grid_step` | numeric or named list | `NULL` | grid step for continuous variables, globally or per variable |
 | `base` | named list or vector | `NULL` | base (factor 1) per variable; overrides `base_level` and the median for the variables named |
+| `merge_vars` | named list or vector | `NULL` | columns that are a regrouping of another variable, keyed by the variable to keep; reported as one block |
 
 **The base point.** One consistent convention: categorical variables at
 their reference level, continuous variables at their **median** (inserted as

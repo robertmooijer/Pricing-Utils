@@ -15,7 +15,8 @@ make_rating_table(
   trim = c(0, 1),
   min_claims = 30,
   grid_step = NULL,
-  base = NULL
+  base = NULL,
+  merge_vars = NULL
 )
 }
 \arguments{
@@ -74,6 +75,31 @@ variables cannot be named, since their base of 1 is what makes the
 intercept a rate per unit of exposure. The choice only moves the
 factors and the intercept against each other: every premium stays the
 same.}
+
+\item{merge_vars}{Optional: declare that two columns are one rating
+factor, as a named list or vector keyed by the variable to keep,
+e.g. \code{list(Stedelijkheid = "Stedelijkheid_groep")}.
+
+This is for the case where the severity model uses a regrouped
+version of a frequency variable: urbanisation 1 to 5 in the
+frequency model, and 1, 2, 3, 4-5 in the severity model because the
+top two classes showed the same average claim. Without it the table
+is still correct, but it holds two blocks for one tariff field, each
+padded with neutral factors of 1, and both have to be applied to
+arrive at the premium. With it there is one block, on the levels of
+the variable a policy actually carries, whose severity factor is the
+one belonging to the group that level falls in.
+
+The regrouped column must be a function of the variable it regroups:
+every value maps to exactly one group, which is checked against
+\code{data}. A band of a continuous variable also works; a grid point that
+does not occur in the data takes the band of the nearest value that
+does. The merged column keeps no block of its own, cannot be named in
+\code{base}, and an interaction on it is reported under the name of the
+variable it is merged into. When the relation is there but not
+declared, and each column is used by one of the two models, this is
+pointed out in a warning rather than left to be discovered in a
+spreadsheet.}
 }
 \value{
 A data.frame with one row per level/grid point per variable

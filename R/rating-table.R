@@ -63,6 +63,30 @@
 #'   intercept a rate per unit of exposure. The choice only moves the
 #'   factors and the intercept against each other: every premium stays the
 #'   same.
+#' @param merge_vars Optional: declare that two columns are one rating
+#'   factor, as a named list or vector keyed by the variable to keep,
+#'   e.g. `list(Stedelijkheid = "Stedelijkheid_groep")`.
+#'
+#'   This is for the case where the severity model uses a regrouped
+#'   version of a frequency variable: urbanisation 1 to 5 in the
+#'   frequency model, and 1, 2, 3, 4-5 in the severity model because the
+#'   top two classes showed the same average claim. Without it the table
+#'   is still correct, but it holds two blocks for one tariff field, each
+#'   padded with neutral factors of 1, and both have to be applied to
+#'   arrive at the premium. With it there is one block, on the levels of
+#'   the variable a policy actually carries, whose severity factor is the
+#'   one belonging to the group that level falls in.
+#'
+#'   The regrouped column must be a function of the variable it regroups:
+#'   every value maps to exactly one group, which is checked against
+#'   `data`. A band of a continuous variable also works; a grid point that
+#'   does not occur in the data takes the band of the nearest value that
+#'   does. The merged column keeps no block of its own, cannot be named in
+#'   `base`, and an interaction on it is reported under the name of the
+#'   variable it is merged into. When the relation is there but not
+#'   declared, and each column is used by one of the two models, this is
+#'   pointed out in a warning rather than left to be discovered in a
+#'   spreadsheet.
 #' @param min_claims Thin-cell threshold: levels/grid points backed by
 #'   fewer claims get `IsThin = TRUE` (default 30). A GLM applies no
 #'   shrinkage to a categorical level, so such a factor comes essentially
@@ -92,7 +116,8 @@ make_rating_table <- function(model_freq = NULL,
                               trim         = c(0, 1),
                               min_claims   = 30,
                               grid_step    = NULL,
-                              base         = NULL) {
+                              base         = NULL,
+                              merge_vars   = NULL) {
 
   base_level <- match.arg(base_level)
   if (is.null(model_freq) && is.null(model_sev)) {
@@ -151,9 +176,107 @@ make_rating_table <- function(model_freq = NULL,
     if (!is.null(xlev_all[[bv]])) xlev_all[[bv]] else levels(factor(data[[bv]]))
   }
 
+  # One rating factor under two column names --------------------------------
+  # A variable can enter the frequency model under its own name and the
+  # severity model as a regrouping of itself - urbanisation 1 to 5 against
+  # 1, 2, 3, 4-5 - because the severity showed no difference between the
+  # top two classes. Those are two columns but one tariff field, and
+  # `merge_vars` says so, so the table reports one block keyed on the
+  # column a policy actually carries.
+  merge_map <- list()   # alias -> the variable it is a regrouping of
+  alias_of  <- list()   # variable -> its aliases
+  level_map <- list()   # alias -> lookup from the variable's value
+  if (!is.null(merge_vars)) {
+    merge_vars <- as.list(merge_vars)
+    if (is.null(names(merge_vars)) || any(!nzchar(names(merge_vars))))
+      stop("make_rating_table: 'merge_vars' must be named by the variable ",
+           "to keep, e.g. list(Stedelijkheid = \"Stedelijkheid_groep\").",
+           call. = FALSE)
+    for (pv in names(merge_vars)) {
+      als <- as.character(unlist(merge_vars[[pv]]))
+      .check_cols(data, c(pv, als), "make_rating_table")
+      for (a in als) {
+        if (identical(a, pv))
+          stop("make_rating_table: 'merge_vars' maps '", pv, "' onto itself.",
+               call. = FALSE)
+        if (!is.null(merge_map[[a]]))
+          stop("make_rating_table: '", a, "' is given as a regrouping of ",
+               "both '", merge_map[[a]], "' and '", pv, "'.", call. = FALSE)
+        if (!is.null(alias_of[[a]]))
+          stop("make_rating_table: '", a, "' is both a regrouping of '", pv,
+               "' and the variable '", paste(alias_of[[a]], collapse = ", "),
+               "' is merged into; chains are not supported.", call. = FALSE)
+        # The relation has to be a function of the variable: one group per
+        # value. If a value occurs with two groups there is no single
+        # factor to put on that row, and silently taking the first would
+        # be wrong for part of the portfolio.
+        ok <- !is.na(data[[pv]]) & !is.na(data[[a]])
+        pr <- as.data.frame(unique(d_dt[ok %in% TRUE, c(pv, a),
+                                        with = FALSE]))
+        names(pr) <- c("p", "a")
+        pr$p <- as.character(pr$p); pr$a <- as.character(pr$a)
+        bad <- unique(pr$p[duplicated(pr$p)])
+        if (length(bad))
+          stop("make_rating_table: '", a, "' is not a regrouping of '", pv,
+               "': the value(s) ", paste(utils::head(bad, 5), collapse = ", "),
+               " of '", pv, "' occur with more than one value of '", a,
+               "', so no single factor belongs to them.", call. = FALSE)
+        if (!var_is_cat(pv) && is.numeric(data[[pv]])) {
+          o <- order(as.numeric(pr$p))
+          level_map[[a]] <- list(num = as.numeric(pr$p)[o], val = pr$a[o])
+        } else {
+          level_map[[a]] <- list(num = NULL,
+                                 val = stats::setNames(pr$a, pr$p))
+        }
+        merge_map[[a]]  <- pv
+        alias_of[[pv]]  <- c(alias_of[[pv]], a)
+      }
+    }
+  }
+
+  # The alias value belonging to each value of the variable it regroups.
+  # A categorical variable looks its level up. A continuous grid can hold a
+  # value that does not occur in the data, so there it takes the band of
+  # the nearest value that does, which is the band it falls in because a
+  # band covers a run of neighbouring values.
+  alias_values <- function(a, vals) {
+    lm  <- level_map[[a]]
+    out <- if (is.null(lm$num)) unname(lm$val[as.character(vals)]) else {
+      v    <- suppressWarnings(as.numeric(as.character(vals)))
+      brks <- c(-Inf, lm$num[-1] - diff(lm$num) / 2, Inf)
+      lm$val[findInterval(v, brks)]
+    }
+    if (anyNA(out)) {
+      miss <- unique(as.character(vals)[is.na(out)])
+      stop("the value(s) ", paste(utils::head(miss, 5), collapse = ", "),
+           " of '", merge_map[[a]], "' do not occur in 'data', so their ",
+           "group in '", a, "' is unknown", call. = FALSE)
+    }
+    out
+  }
+
+  # Put a variable into a prediction frame, together with every column that
+  # is a regrouping of it: if the two models use different spellings of one
+  # rating factor, both have to move or the merged block would hold one
+  # model at its base value while the other moves.
+  set_var <- function(newd, vars, bv, vals) {
+    if (bv %in% vars) newd[[bv]] <- .coerce_like(vals, data[[bv]])
+    for (a in alias_of[[bv]]) if (a %in% vars)
+      newd[[a]] <- .coerce_like(alias_values(a, vals), data[[a]])
+    newd
+  }
+  # The name a merged variable is reported under.
+  canon <- function(v) if (!is.null(merge_map[[v]])) merge_map[[v]] else v
+  # Every spelling of one rating factor, to test a model against.
+  spellings <- function(bv) c(bv, alias_of[[bv]])
+
   # Base value per variable (raw value, not yet coerced):
   #   categorical -> reference level; continuous -> median; exposure -> 1
   base_value_raw <- function(bv) {
+    # A regrouped column sits at the group its variable's base value falls
+    # in, so the base row is a policy that could exist
+    if (!is.null(merge_map[[bv]]))
+      return(alias_values(bv, base_value_raw(merge_map[[bv]])))
     # Any offset variable sits at 1, not just the one named by
     # exposure_col, so the intercept is a rate per unit of exposure
     # whatever that column happens to be called
@@ -200,10 +323,11 @@ make_rating_table <- function(model_freq = NULL,
   predict_factor <- function(model, var_name, grid_vals) {
     n <- length(grid_vals)
     if (is.null(model)) return(rep(NA_real_, n))
-    if (!var_name %in% .rhs_vars(model)) return(rep(1, n))
+    vars <- .rhs_vars(model)
+    if (!any(spellings(var_name) %in% vars)) return(rep(1, n))
     base_df <- base_df_for(model)
     newd    <- base_df[rep(1, n), , drop = FALSE]
-    newd[[var_name]] <- .coerce_like(grid_vals, data[[var_name]])
+    newd    <- set_var(newd, vars, var_name, grid_vals)
     preds <- as.numeric(predict(model, newdata = newd,   type = "response"))
     ref   <- as.numeric(predict(model, newdata = base_df, type = "response"))
     preds / ref
@@ -217,10 +341,8 @@ make_rating_table <- function(model_freq = NULL,
     vars    <- .rhs_vars(model)
     base_df <- base_df_for(model)
     newd    <- base_df[rep(1, n), , drop = FALSE]
-    if (vx %in% vars)
-      newd[[vx]] <- .coerce_like(rep(gx, times = length(gg)), data[[vx]])
-    if (vg %in% vars)
-      newd[[vg]] <- .coerce_like(rep(gg, each  = length(gx)), data[[vg]])
+    newd <- set_var(newd, vars, vx, rep(gx, times = length(gg)))
+    newd <- set_var(newd, vars, vg, rep(gg, each  = length(gx)))
     preds <- as.numeric(predict(model, newdata = newd, type = "response"))
     preds / preds[i_base]
   }
@@ -296,7 +418,7 @@ make_rating_table <- function(model_freq = NULL,
     if (is.null(model)) return(character(0))
     labs  <- attr(terms(model), "term.labels")
     comps <- unique(unlist(strsplit(labs, ":", fixed = TRUE)))
-    unique(vapply(comps, base_var, character(1)))
+    unique(vapply(comps, function(x) canon(base_var(x)), character(1)))
   }
 
   uniq_bases <- unique(c(model_bases(model_freq), model_bases(model_sev)))
@@ -310,6 +432,55 @@ make_rating_table <- function(model_freq = NULL,
   if (!length(uniq_bases))
     stop("make_rating_table: no usable variables found.")
 
+  # A merge declaration that matches no term is as silent a mistake as a
+  # misspelled grid step: the two blocks stay, and nothing says why.
+  if (length(merge_map)) {
+    model_terms <- unique(c(if (!is.null(model_freq)) .rhs_vars(model_freq),
+                            if (!is.null(model_sev))  .rhs_vars(model_sev)))
+    idle <- names(merge_map)[!vapply(names(merge_map), function(a)
+      any(c(a, merge_map[[a]]) %in% model_terms), logical(1))]
+    if (length(idle))
+      warning("make_rating_table: 'merge_vars' mentions ",
+              paste(idle, collapse = ", "), ", which neither model uses, ",
+              "so the declaration changes nothing.", call. = FALSE)
+  }
+
+  # The same situation left undeclared. Worth one line, because the table
+  # is then right but reads as two tariff fields where there is one, and
+  # whoever builds the tariff from it has to know they belong together.
+  # Only across the two models: two nested factors inside one model (a
+  # postcode and its region) are genuinely two rating factors.
+  if (!is.null(model_freq) && !is.null(model_sev)) {
+    f_only <- setdiff(.rhs_vars(model_freq), .rhs_vars(model_sev))
+    s_only <- setdiff(.rhs_vars(model_sev),  .rhs_vars(model_freq))
+    cand   <- character(0)
+    for (a in intersect(f_only, names(data))) for (b in intersect(s_only, names(data))) {
+      if (!is.null(merge_map[[a]]) || !is.null(merge_map[[b]])) next
+      if (is.numeric(data[[a]]) && is.numeric(data[[b]])) next
+      na <- data.table::uniqueN(d_dt[[a]], na.rm = TRUE)
+      nb <- data.table::uniqueN(d_dt[[b]], na.rm = TRUE)
+      # A column with very many levels is not a tariff block, and two
+      # columns of the same width are not a regrouping of one another
+      if (na < 2 || nb < 2 || na == nb || max(na, nb) > 1000) next
+      fine   <- if (na > nb) a else b
+      coarse <- if (na > nb) b else a
+      sub    <- d_dt[!is.na(get(a)) & !is.na(get(b)), c(fine, coarse),
+                     with = FALSE]
+      if (!nrow(sub)) next
+      # One group per value, which is what makes it a regrouping
+      if (nrow(unique(sub)) == data.table::uniqueN(sub[[1L]]))
+        cand <- c(cand, paste0("merge_vars = list(", fine, " = \"", coarse,
+                               "\")"))
+    }
+    if (length(cand))
+      warning("make_rating_table: one column looks like a regrouping of ",
+              "another, each used by one of the two models, so the table ",
+              "holds two blocks for what is one tariff field. If that is ",
+              "what they are, pass ",
+              paste(unique(cand), collapse = " or "),
+              ".", call. = FALSE)
+  }
+
   # A chosen base per variable. Checked up front, because a wrong one does
   # not fail later: it silently moves every factor of that variable.
   if (!is.null(base)) {
@@ -317,6 +488,12 @@ make_rating_table <- function(model_freq = NULL,
     if (is.null(names(base)) || any(!nzchar(names(base))))
       stop("make_rating_table: 'base' must be named, e.g. ",
            "list(REGIO = \"Zuid\", LEEFTIJD = 40).", call. = FALSE)
+    merged <- intersect(names(base), names(merge_map))
+    if (length(merged))
+      stop("make_rating_table: '", paste(merged, collapse = ", "), "' is ",
+           "merged into '",
+           paste(unique(unlist(merge_map[merged])), collapse = ", "),
+           "'; set the base on that variable instead.", call. = FALSE)
     fixed <- intersect(names(base), c(exposure_col, offset_vars))
     if (length(fixed))
       stop("make_rating_table: '", paste(fixed, collapse = ", "), "' is an ",
@@ -380,7 +557,11 @@ make_rating_table <- function(model_freq = NULL,
     for (lab in ints) {
       comps <- strsplit(lab, ":", fixed = TRUE)[[1]]
       if (length(comps) != 2) next                       # two-way only
-      bvs <- unname(vapply(comps, base_var, character(1)))
+      bvs <- unname(vapply(comps, function(x) canon(base_var(x)),
+                           character(1)))
+      # An interaction between a variable and a regrouping of itself is one
+      # variable after merging, so there is no two-way table to build
+      if (bvs[1] == bvs[2]) next
       key <- paste(sort(bvs), collapse = ":")
       if (key %in% seen) next
       seen <- c(seen, key); res[[length(res) + 1L]] <- bvs
