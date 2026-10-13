@@ -90,6 +90,15 @@ arrive at the premium. With it there is one block, on the levels of
 the variable a policy actually carries, whose severity factor is the
 one belonging to the group that level falls in.
 
+The regrouped column does not have to be in \code{data}. It is usually made
+next to the average claim, in the dataset the severity model is fitted
+on, while \code{data} is the whole portfolio. A fitted model carries its own
+data, so the relation is read off the model that uses the column and
+the column is derived for \code{data} here. Your data frame is not changed.
+A level that occurs in \code{data} but in no row of that model's data has no
+group to derive, which is an error naming those levels: a level with no
+claims has no severity factor either way.
+
 The regrouped column must be a function of the variable it regroups:
 every value maps to exactly one group, which is checked against
 \code{data}. A band of a continuous variable also works; a grid point that

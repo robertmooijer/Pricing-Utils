@@ -1118,7 +1118,46 @@ band of the nearest age that does, which is the band it falls in, because
 a band covers a run of neighbouring values. The boundaries come out right:
 30 is still in 18-30, and 40 and 50 are in 31-50.
 
-##### 6. What is refused
+##### 6. When the regrouped column is only in the severity data
+
+The grouping is usually made where it is needed, next to the average claim,
+so it ends up in the dataset the severity model is fitted on and not in the
+portfolio you hand to `make_rating_table()`. That is fine: a fitted model
+carries its own data, so the relation is read off the model and the column
+is derived here.
+
+```r
+# dat has no Stedelijkheid_groep at all
+names(dat)
+#> "Stedelijkheid" "LEEFTIJD" "Exposure" "AantalClaims" "SCHADELAST"
+
+# d_sev, which m_sev was fitted on, does
+d_sev$Stedelijkheid_groep <- factor(
+  ifelse(d_sev$Stedelijkheid %in% c("4", "5"), "4-5",
+         as.character(d_sev$Stedelijkheid)))
+
+make_rating_table(m_freq, m_sev, data = dat,
+                  merge_vars = list(Stedelijkheid = "Stedelijkheid_groep"))
+```
+
+That is the whole call. The result is identical to adding the column
+yourself first, your data frame is not changed, and an age band against a
+spline works the same way.
+
+One case is an error rather than a guess. A level that occurs in `data` but
+in no row of the severity data has no group to derive:
+
+```
+Error: the value(s) 1 of 'Stedelijkheid' do not occur in the data the
+       severity model was fitted on, so their group in 'Stedelijkheid_groep'
+       is unknown. A level with no claims has no group there: give it one in
+       that model's data, or put 'Stedelijkheid_groep' in 'data' yourself.
+```
+
+A level with no claims has no severity factor either way, so the fix is in
+the model: group it with a level that does have claims.
+
+##### 7. What is refused
 
 The relation has to be a function of the variable: every value maps to
 exactly one group. That is checked against `data`, so a column that is not
@@ -1141,7 +1180,7 @@ make_rating_table(m_freq, m_sev, data = dat,
 A declaration that neither model uses raises a warning rather than
 changing nothing in silence, and so does a column that does not exist.
 
-##### 7. The export
+##### 8. The export
 
 ```r
 export_rating_table(tbl,  "tariff.xlsx")
@@ -1163,6 +1202,9 @@ of two keys that both have to be applied.
   columns.
 - The regrouped column must be a function of the variable it regroups,
   which is checked against `data`.
+- It does not have to be in `data`. When only the model that uses it has
+  it, the relation is read off that model and the column is derived, and
+  your data frame is left as it was.
 - It keeps no block of its own, cannot be named in `base`, and an
   interaction on it is reported under the name of the variable it is merged
   into.
@@ -1189,7 +1231,7 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
 | `trim` | quantile range for continuous grids, e.g. `c(0.005, 0.995)` to avoid outlier tails and spline extrapolation |
 | `min_claims` | thin-cell threshold: levels with fewer claims get `IsThin = TRUE` (categorical thin levels also raise a warning) |
 | `base` | your own base per variable, e.g. `list(REGIO = "Zuid", LEEFTIJD = 40)`; `NULL` keeps the default base |
-| `merge_vars` | two columns that are one rating factor, e.g. `list(Stedelijkheid = "Stedelijkheid_groep")`; see [One rating factor, two columns](#one-rating-factor-two-columns) |
+| `merge_vars` | two columns that are one rating factor, e.g. `list(Stedelijkheid = "Stedelijkheid_groep")`; the regrouped column may live in the model's own data rather than in `data`; see [One rating factor, two columns](#one-rating-factor-two-columns) |
 
 **Returns** a data.frame with one row per level/grid point per variable:
 

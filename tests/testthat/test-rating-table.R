@@ -516,9 +516,11 @@ test_that("a merge declaration that cannot hold is refused", {
   expect_error(make_rating_table(mf, NULL, data = dm,
                                  merge_vars = list(A = "A")),
                "onto itself")
+  # a misspelled column is in neither the data nor a model, so there is
+  # nothing to derive it from either
   expect_error(make_rating_table(mf, NULL, data = dm,
                                  merge_vars = list(A = "A_group")),
-               "not found in the data")
+               "no model uses it")
   expect_error(make_rating_table(mf, NULL, data = dm,
                                  merge_vars = list(A = "A_groep",
                                                    B = "A_groep")),
@@ -531,4 +533,99 @@ test_that("a merge declaration that cannot hold is refused", {
   expect_warning(make_rating_table(mf, NULL, data = dm,
                                    merge_vars = list(B = "B_alles")),
                  "neither model uses")
+})
+
+test_that("a regrouped column missing from 'data' is taken from the model", {
+  set.seed(97)
+  nm <- 25000
+  dm <- data.frame(Stedelijkheid = factor(sample(1:5, nm, TRUE)),
+                   LEEFTIJD = round(runif(nm, 18, 80)),
+                   Exposure = round(runif(nm, .3, 1), 3))
+  dm$AantalClaims <- rpois(nm, dm$Exposure *
+    exp(-2 + .15 * as.numeric(as.character(dm$Stedelijkheid))))
+  dm$SCHADELAST <- ifelse(dm$AantalClaims > 0, dm$AantalClaims *
+    rgamma(nm, 3, scale = 600 * ifelse(dm$Stedelijkheid %in% c("4", "5"),
+                                       1.25, 1)), 0)
+  ds <- dm[dm$AantalClaims > 0, ]
+  ds$AvgLoss <- ds$SCHADELAST / ds$AantalClaims
+  # the grouping is made next to the average claim, so only the severity
+  # dataset has it
+  ds$Sted_groep <- factor(ifelse(ds$Stedelijkheid %in% c("4", "5"), "4-5",
+                                 as.character(ds$Stedelijkheid)))
+  mf <- glm(AantalClaims ~ Stedelijkheid + LEEFTIJD + offset(log(Exposure)),
+            poisson(), dm)
+  ms <- glm(AvgLoss ~ Sted_groep, Gamma("log"), ds, weights = AantalClaims)
+  mv <- list(Stedelijkheid = "Sted_groep")
+  expect_false("Sted_groep" %in% names(dm))
+
+  t1 <- make_rating_table(mf, ms, data = dm, merge_vars = mv)
+  s1 <- t1[t1$Variable == "Stedelijkheid", ]
+  expect_equal(nrow(s1), 5)
+  expect_equal(s1$Factor_Severity[s1$Level == "4"],
+               s1$Factor_Severity[s1$Level == "5"])
+
+  # exactly what adding the column by hand would have given
+  map <- unique(ms$data[, c("Stedelijkheid", "Sted_groep")])
+  dm2 <- merge(dm, map, by = "Stedelijkheid", all.x = TRUE)
+  expect_equal(t1, make_rating_table(mf, ms, data = dm2, merge_vars = mv))
+
+  # and the caller's data frame is left alone
+  expect_false("Sted_groep" %in% names(dm))
+
+  nd <- data.frame(Stedelijkheid = factor("5", levels(dm$Stedelijkheid)),
+                   Sted_groep = factor("4-5", levels(ds$Sted_groep)),
+                   LEEFTIJD = 40, Exposure = 1, AantalClaims = 1)
+  f <- function(v, l) {
+    s <- t1[t1$Variable == v & is.na(t1$Group), ]
+    s$Factor_Premium[match(l, s$Level)]
+  }
+  expect_equal(attr(t1, "intercept_premium") * f("Stedelijkheid", "5") *
+                 f("LEEFTIJD", "40"),
+               as.numeric(predict(mf, nd, type = "response") *
+                          predict(ms, nd, type = "response")),
+               tolerance = 1e-10)
+
+  # a level with no claims at all has no group to derive, and is named
+  ds3 <- ds[ds$Stedelijkheid != "1", ]
+  ds3$Sted_groep <- droplevels(ds3$Sted_groep)
+  ms3 <- glm(AvgLoss ~ Sted_groep, Gamma("log"), ds3, weights = AantalClaims)
+  expect_error(make_rating_table(mf, ms3, data = dm, merge_vars = mv),
+               "do not occur in the data the severity model")
+
+  # a model that carries no data of its own cannot be read either
+  ms4 <- ms; ms4$data <- environment()
+  expect_error(make_rating_table(mf, ms4, data = dm, merge_vars = mv),
+               "carries none")
+
+  # a column that exists nowhere is not a merge at all
+  expect_error(make_rating_table(mf, ms, data = dm,
+                                 merge_vars = list(Stedelijkheid = "Sted_xyz")),
+               "no model uses it")
+})
+
+test_that("a band missing from 'data' is derived per nearest observed value", {
+  set.seed(98)
+  nm <- 20000
+  dm <- data.frame(LEEFTIJD = round(runif(nm, 18, 80)),
+                   Exposure = round(runif(nm, .3, 1), 3))
+  dm$AantalClaims <- rpois(nm, dm$Exposure * .25)
+  dm$SCHADELAST <- ifelse(dm$AantalClaims > 0, dm$AantalClaims *
+    rgamma(nm, 3, scale = 600 * ifelse(dm$LEEFTIJD <= 30, 1.3, 1)), 0)
+  ds <- dm[dm$AantalClaims > 0, ]
+  ds$AvgLoss <- ds$SCHADELAST / ds$AantalClaims
+  ds$LEEFTIJD_KL <- cut(ds$LEEFTIJD, c(17, 30, 50, 80),
+                        labels = c("18-30", "31-50", "51-80"))
+  mf <- glm(AantalClaims ~ LEEFTIJD + offset(log(Exposure)), poisson(), dm)
+  ms <- glm(AvgLoss ~ LEEFTIJD_KL, Gamma("log"), ds, weights = AantalClaims)
+
+  t1 <- make_rating_table(mf, ms, data = dm,
+                          merge_vars = list(LEEFTIJD = "LEEFTIJD_KL"),
+                          grid_step = c(LEEFTIJD = 5))
+  s <- t1[t1$Variable == "LEEFTIJD", ]
+  band <- function(age) s$Factor_Severity[s$LevelNum == age]
+  expect_equal(band(20), band(30))
+  expect_equal(band(35), band(50))
+  expect_equal(band(55), band(80))
+  expect_false(isTRUE(all.equal(band(30), band(35))))
+  expect_false("LEEFTIJD_KL" %in% names(dm))
 })
