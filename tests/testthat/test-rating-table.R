@@ -629,3 +629,135 @@ test_that("a band missing from 'data' is derived per nearest observed value", {
   expect_false(isTRUE(all.equal(band(30), band(35))))
   expect_false("LEEFTIJD_KL" %in% names(dm))
 })
+
+test_that("one column name with two groupings is refused, not averaged over", {
+  set.seed(99)
+  nm <- 20000
+  dm <- data.frame(MERK = factor(sample(c("A", "B", "C", "D"), nm, TRUE)),
+                   Exposure = round(runif(nm, .3, 1), 3))
+  dm$AantalClaims <- rpois(nm, dm$Exposure *
+                             exp(-2 + .3 * (dm$MERK %in% c("C", "D"))))
+  dm$SCHADELAST <- ifelse(dm$AantalClaims > 0, dm$AantalClaims *
+    rgamma(nm, 3, scale = 600 * ifelse(dm$MERK == "D", 1.4, 1)), 0)
+  sev_rows <- function(d) {
+    s <- d[d$AantalClaims > 0, ]
+    s$AvgLoss <- s$SCHADELAST / s$AantalClaims
+    s
+  }
+
+  # the same grouping on both sides is fine and stays fine
+  df <- dm; df$MERK_GROEP <- factor(ifelse(df$MERK %in% c("A", "B"), "G1", "G2"))
+  ds <- sev_rows(df)
+  mf <- glm(AantalClaims ~ MERK_GROEP + offset(log(Exposure)), poisson(), df)
+  ms <- glm(AvgLoss ~ MERK_GROEP, Gamma("log"), ds, weights = AantalClaims)
+  t_ok <- make_rating_table(mf, ms, data = dm,
+                            merge_vars = list(MERK = "MERK_GROEP"))
+  s <- t_ok[t_ok$Variable == "MERK", ]
+  nd <- data.frame(MERK_GROEP = factor("G2", levels = c("G1", "G2")),
+                   Exposure = 1, AantalClaims = 1)
+  expect_equal(attr(t_ok, "intercept_premium") *
+                 s$Factor_Premium[s$Level == "C"],
+               as.numeric(predict(mf, nd, type = "response") *
+                          predict(ms, nd, type = "response")),
+               tolerance = 1e-10)
+
+  # same labels, different membership: this used to produce a table whose
+  # severity factors came from the frequency grouping, silently
+  ds2 <- sev_rows(dm)
+  ds2$MERK_GROEP <- factor(ifelse(ds2$MERK %in% c("A", "B", "C"), "G1", "G2"))
+  ms2 <- glm(AvgLoss ~ MERK_GROEP, Gamma("log"), ds2, weights = AantalClaims)
+  expect_error(make_rating_table(mf, ms2, data = dm,
+                                 merge_vars = list(MERK = "MERK_GROEP")),
+               "does not mean the same thing everywhere")
+  expect_error(make_rating_table(mf, ms2, data = dm,
+                                 merge_vars = list(MERK = "MERK_GROEP")),
+               "'C' of 'MERK'")
+
+  # different labels: refused with the same message rather than a bare
+  # prediction failure further down
+  ds3 <- sev_rows(dm)
+  ds3$MERK_GROEP <- factor(ifelse(ds3$MERK %in% c("B", "C"), "B-C",
+                                  as.character(ds3$MERK)))
+  ms3 <- glm(AvgLoss ~ MERK_GROEP, Gamma("log"), ds3, weights = AantalClaims)
+  expect_error(make_rating_table(mf, ms3, data = dm,
+                                 merge_vars = list(MERK = "MERK_GROEP")),
+               "does not mean the same thing everywhere")
+
+  # the way out: two names, both declared
+  df4 <- dm; df4$MERK_GR_F <- factor(ifelse(df4$MERK %in% c("A", "B"),
+                                            "A-B", as.character(df4$MERK)))
+  ds4 <- sev_rows(dm)
+  ds4$MERK_GR_S <- factor(ifelse(ds4$MERK %in% c("B", "C"), "B-C",
+                                 as.character(ds4$MERK)))
+  mf4 <- glm(AantalClaims ~ MERK_GR_F + offset(log(Exposure)), poisson(), df4)
+  ms4 <- glm(AvgLoss ~ MERK_GR_S, Gamma("log"), ds4, weights = AantalClaims)
+  t4 <- make_rating_table(mf4, ms4, data = dm,
+                          merge_vars = list(MERK = c("MERK_GR_F", "MERK_GR_S")))
+  s4 <- t4[t4$Variable == "MERK", ]
+  expect_equal(nrow(s4), 4)
+  for (m in levels(dm$MERK)) {
+    nd4 <- data.frame(
+      MERK_GR_F = factor(if (m %in% c("A", "B")) "A-B" else m,
+                         levels = levels(df4$MERK_GR_F)),
+      MERK_GR_S = factor(if (m %in% c("B", "C")) "B-C" else m,
+                         levels = levels(ds4$MERK_GR_S)),
+      Exposure = 1, AantalClaims = 1)
+    expect_equal(attr(t4, "intercept_premium") *
+                   s4$Factor_Premium[s4$Level == m],
+                 as.numeric(predict(mf4, nd4, type = "response") *
+                            predict(ms4, nd4, type = "response")),
+                 tolerance = 1e-10)
+  }
+})
+
+test_that("two bandings of one continuous variable are kept apart", {
+  set.seed(100)
+  nm <- 20000
+  dm <- data.frame(LEEFTIJD = round(runif(nm, 18, 80)),
+                   Exposure = round(runif(nm, .3, 1), 3))
+  dm$AantalClaims <- rpois(nm, dm$Exposure * .25)
+  dm$SCHADELAST <- ifelse(dm$AantalClaims > 0, dm$AantalClaims *
+    rgamma(nm, 3, scale = 600 * ifelse(dm$LEEFTIJD < 35, 1.3, 1)), 0)
+  sev_rows <- function(d) {
+    s <- d[d$AantalClaims > 0, ]
+    s$AvgLoss <- s$SCHADELAST / s$AantalClaims
+    s
+  }
+  band <- function(x, cut) cut(x, c(17, cut, 80), labels = c("LAAG", "HOOG"))
+
+  # one name, same labels, different cut points: the strip between the two
+  # cuts would get the wrong severity class
+  df <- dm; df$LFT_KL <- band(df$LEEFTIJD, 40)
+  ds <- sev_rows(dm); ds$LFT_KL <- band(ds$LEEFTIJD, 50)
+  mf <- glm(AantalClaims ~ LFT_KL + offset(log(Exposure)), poisson(), df)
+  ms <- glm(AvgLoss ~ LFT_KL, Gamma("log"), ds, weights = AantalClaims)
+  expect_error(make_rating_table(mf, ms, data = dm,
+                                 merge_vars = list(LEEFTIJD = "LFT_KL"),
+                                 grid_step = c(LEEFTIJD = 5)),
+               "does not mean the same thing everywhere")
+
+  # two names: both bandings land in one block, on the real ages
+  df2 <- dm; df2$LFT_F <- band(df2$LEEFTIJD, 40)
+  ds2 <- sev_rows(dm); ds2$LFT_S <- band(ds2$LEEFTIJD, 50)
+  mf2 <- glm(AantalClaims ~ LFT_F + offset(log(Exposure)), poisson(), df2)
+  ms2 <- glm(AvgLoss ~ LFT_S, Gamma("log"), ds2, weights = AantalClaims)
+  t2 <- make_rating_table(mf2, ms2, data = dm,
+                          merge_vars = list(LEEFTIJD = c("LFT_F", "LFT_S")),
+                          grid_step = c(LEEFTIJD = 5))
+  s2 <- t2[t2$Variable == "LEEFTIJD", ]
+  for (a in c(20, 45, 60)) {
+    nd <- data.frame(LFT_F = band(a, 40), LFT_S = band(a, 50),
+                     Exposure = 1, AantalClaims = 1)
+    expect_equal(attr(t2, "intercept_premium") *
+                   s2$Factor_Premium[s2$LevelNum == a],
+                 as.numeric(predict(mf2, nd, type = "response") *
+                            predict(ms2, nd, type = "response")),
+                 tolerance = 1e-10)
+  }
+  # the age between the two cut points is where the two bandings disagree,
+  # and it now carries the severity of its own band
+  expect_equal(s2$Factor_Severity[s2$LevelNum == 45],
+               s2$Factor_Severity[s2$LevelNum == 20])
+  expect_false(isTRUE(all.equal(s2$Factor_Frequency[s2$LevelNum == 45],
+                                s2$Factor_Frequency[s2$LevelNum == 20])))
+})

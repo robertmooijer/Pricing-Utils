@@ -99,6 +99,17 @@ A level that occurs in \code{data} but in no row of that model's data has no
 group to derive, which is an error naming those levels: a level with no
 claims has no severity factor either way.
 
+One grouping per column name. A grouping is often made twice, once in
+each dataset, and the two need not agree: the frequency data may put
+brand C with D where the severity data puts it with A and B. Only one
+of the two can be in \code{data}, so the other model would be read on a
+grouping it was not fitted on. The mapping in \code{data} is therefore
+compared with the one each model's own data defines, and a difference
+is an error naming the value it turns on. When the two models really
+do group differently, give the columns separate names and name both:
+\code{list(MERK = c("MERK_GROEP_freq", "MERK_GROEP_sev"))}, which puts both
+groupings in one block on the brands themselves.
+
 The regrouped column must be a function of the variable it regroups:
 every value maps to exactly one group, which is checked against
 \code{data}. A band of a continuous variable also works; a grid point that

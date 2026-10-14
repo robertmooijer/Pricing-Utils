@@ -1157,7 +1157,63 @@ Error: the value(s) 1 of 'Stedelijkheid' do not occur in the data the
 A level with no claims has no severity factor either way, so the fix is in
 the model: group it with a level that does have claims.
 
-##### 7. What is refused
+##### 7. Two groupings, one column name
+
+A grouping is made where it is needed, so it is often made twice, once per
+dataset, and the two need not agree. The frequency model may put brand C
+with D, while the severity model puts C with A and B. If both columns are
+called `MERK_GROEP`, they are two different variables under one name, and
+`data` can hold only one of them.
+
+That is refused:
+
+```r
+# frequency data: A+B = G1, C+D = G2
+# severity data : A+B+C = G1, D = G2
+make_rating_table(m_freq, m_sev, data = dat,
+                  merge_vars = list(MERK = "MERK_GROEP"))
+#> Error: 'MERK_GROEP' does not mean the same thing everywhere: 'C' of 'MERK'
+#>        is 'G2' in 'data' and 'G1' in the data the severity model was fitted
+#>        on. Two groupings of one variable cannot share a column name: give
+#>        them separate names and name both in 'merge_vars', as
+#>        merge_vars = list(MERK = c("MERK_GROEP_freq", "MERK_GROEP_sev")).
+```
+
+This is worth stating plainly, because it is the one case where the table
+could be wrong rather than absent. If the two groupings use different
+labels (`A-B` against `B-C`), predicting fails and nothing is produced. If
+they happen to use the same labels (`G1`, `G2`), nothing fails: the
+severity factors would be read off the frequency grouping and brand C can
+end up tens of percent out, on a table that looks perfectly ordinary. The
+mapping in `data` is therefore compared with the one each model's own data
+defines, before any factor is computed.
+
+The way out is to keep the two apart and declare both, which is what the
+message suggests:
+
+```r
+dat_f$MERK_GR_F <- factor(ifelse(dat_f$MERK %in% c("A", "B"), "A-B",
+                                 as.character(dat_f$MERK)))
+dat_s$MERK_GR_S <- factor(ifelse(dat_s$MERK %in% c("C", "D"), "C-D",
+                                 as.character(dat_s$MERK)))
+
+make_rating_table(m_freq, m_sev, data = dat,
+                  merge_vars = list(MERK = c("MERK_GR_F", "MERK_GR_S")))
+```
+
+| Level | Factor_Frequency | Factor_Severity | Factor_Premium |
+|---|---|---|---|
+| A | 1.000000 | 1.0000000 | 1.0000000 |
+| B | 1.000000 | 0.9049823 | 0.9049823 |
+| C | 1.338676 | 1.1712957 | 1.5679851 |
+| D | 1.328187 | 1.1712957 | 1.5556998 |
+
+A and B share a frequency factor, C and D share a severity factor, and
+every brand still gets its own premium factor. The same holds for two bandings
+of one continuous variable with different cut points: give them two names
+and both groupings land in one block, on the real ages.
+
+##### 8. What else is refused
 
 The relation has to be a function of the variable: every value maps to
 exactly one group. That is checked against `data`, so a column that is not
@@ -1180,7 +1236,7 @@ make_rating_table(m_freq, m_sev, data = dat,
 A declaration that neither model uses raises a warning rather than
 changing nothing in silence, and so does a column that does not exist.
 
-##### 8. The export
+##### 9. The export
 
 ```r
 export_rating_table(tbl,  "tariff.xlsx")
@@ -1202,6 +1258,9 @@ of two keys that both have to be applied.
   columns.
 - The regrouped column must be a function of the variable it regroups,
   which is checked against `data`.
+- One grouping per column name. When the two models group differently
+  under one name, that is an error, not a table; give the two columns
+  separate names and name both.
 - It does not have to be in `data`. When only the model that uses it has
   it, the relation is read off that model and the column is derived, and
   your data frame is left as it was.

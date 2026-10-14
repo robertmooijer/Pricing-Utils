@@ -86,6 +86,17 @@
 #'   group to derive, which is an error naming those levels: a level with no
 #'   claims has no severity factor either way.
 #'
+#'   One grouping per column name. A grouping is often made twice, once in
+#'   each dataset, and the two need not agree: the frequency data may put
+#'   brand C with D where the severity data puts it with A and B. Only one
+#'   of the two can be in `data`, so the other model would be read on a
+#'   grouping it was not fitted on. The mapping in `data` is therefore
+#'   compared with the one each model's own data defines, and a difference
+#'   is an error naming the value it turns on. When the two models really
+#'   do group differently, give the columns separate names and name both:
+#'   `list(MERK = c("MERK_GROEP_freq", "MERK_GROEP_sev"))`, which puts both
+#'   groupings in one block on the brands themselves.
+#'
 #'   The regrouped column must be a function of the variable it regroups:
 #'   every value maps to exactly one group, which is checked against
 #'   `data`. A band of a continuous variable also works; a grid point that
@@ -305,6 +316,40 @@ make_rating_table <- function(model_freq = NULL,
                "': the value(s) ", paste(utils::head(bad, 5), collapse = ", "),
                " of '", pv, "' occur with more than one value of '", a,
                "', so no single factor belongs to them.", call. = FALSE)
+        # One column name, two meanings. A grouping is often made twice,
+        # once in each dataset, and the two need not agree: the frequency
+        # data may put brand C with D while the severity data puts it with
+        # A and B. Only one of the two can go in `data`, so the other model
+        # would be read on a grouping it was not fitted on. When the labels
+        # differ that ends in a prediction failure, but when both groupings
+        # happen to use the same labels nothing fails and the factors are
+        # quietly wrong, which is why the two are compared here.
+        for (ow in list(list(m = model_freq, nm = "frequency"),
+                        list(m = model_sev,  nm = "severity"))) {
+          if (is.null(ow$m) || !a %in% .rhs_vars(ow$m)) next
+          sd <- if (is.data.frame(ow$m$data)) ow$m$data else NULL
+          if (is.null(sd) || !all(c(pv, a) %in% names(sd))) next
+          ok2 <- !is.na(sd[[pv]]) & !is.na(sd[[a]])
+          mp  <- unique(data.frame(p = as.character(sd[[pv]])[ok2],
+                                   a = as.character(sd[[a]])[ok2],
+                                   stringsAsFactors = FALSE))
+          mp  <- mp[!duplicated(mp$p), ]
+          own <- stats::setNames(mp$a, mp$p)
+          here <- stats::setNames(pr$a, pr$p)
+          shared <- intersect(names(own), names(here))
+          off <- shared[own[shared] != here[shared]]
+          if (length(off))
+            stop("make_rating_table: '", a, "' does not mean the same thing ",
+                 "everywhere: '", off[1], "' of '", pv, "' is '",
+                 here[[off[1]]], "' in 'data' and '", own[[off[1]]],
+                 "' in the data the ", ow$nm, " model was fitted on",
+                 if (length(off) > 1)
+                   paste0(" (", length(off), " values differ)"),
+                 ". Two groupings of one variable cannot share a column ",
+                 "name: give them separate names and name both in ",
+                 "'merge_vars', as merge_vars = list(", pv, " = c(\"", a,
+                 "_freq\", \"", a, "_sev\")).", call. = FALSE)
+        }
         if (!var_is_cat(pv) && is.numeric(data[[pv]])) {
           o <- order(as.numeric(pr$p))
           level_map[[a]] <- list(num = as.numeric(pr$p)[o], val = pr$a[o])
