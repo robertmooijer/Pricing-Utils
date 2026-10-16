@@ -39,6 +39,7 @@ plotly mode bar.
   - [`plot_residual_heatmap()`](#plot_residual_heatmap)
   - [`screen_features()`](#screen_features)
   - [`make_rating_table()`](#make_rating_table)
+  - [`add_groupings()`](#add_groupings)
   - [`make_rating_plot()`](#make_rating_plot)
   - [`model_lift()`](#model_lift)
   - [`double_lift()`](#double_lift)
@@ -1173,9 +1174,10 @@ That is refused:
 make_rating_table(m_freq, m_sev, data = dat,
                   merge_vars = list(MERK = "MERK_GROEP"))
 #> Error: 'MERK_GROEP' does not mean the same thing everywhere: 'C' of 'MERK'
-#>        is 'G2' in 'data' and 'G1' in the data the severity model was fitted
-#>        on. Two groupings of one variable cannot share a column name: give
-#>        them separate names and name both in 'merge_vars', as
+#>        is 'G2' in the data the frequency model was fitted on and 'G1' in the
+#>        data the severity model was fitted on. Two groupings of one variable
+#>        cannot share a column name: give them separate names and name both
+#>        in 'merge_vars', as
 #>        merge_vars = list(MERK = c("MERK_GROEP_freq", "MERK_GROEP_sev")).
 ```
 
@@ -1269,6 +1271,8 @@ of two keys that both have to be applied.
   into.
 - Nothing about the models changes. Nothing is refitted and every premium
   is the same before and after; only the shape of the table changes.
+- The same declaration adds those columns to a dataset you want to score,
+  with [`add_groupings()`](#add_groupings).
 
 ```r
 make_rating_table(model_freq = NULL, model_sev = NULL, data,
@@ -1426,6 +1430,109 @@ behind a premium factor of 1.22, so that factor is essentially noise,
 exactly what the `IsThin` flag is there to surface:
 
 ![Rating table excerpt](man/figures/README-rating-table.png)
+
+### `add_groupings()`
+
+**The question it answers:** *my new portfolio has `Stedelijkheid`, `MERK`
+and `LEEFTIJD`, but my models were fitted on groupings of those columns.
+How do I score it?*
+
+```r
+add_groupings(data, model_freq = NULL, model_sev = NULL, merge_vars)
+```
+
+A grouping is made where it is needed: urbanisation 4 and 5 taken together
+next to the average claim, brands grouped one way for the frequency and
+another way for the severity, an age band for the severity next to a spline
+in the frequency model. Those columns then live in the data each model was
+fitted on and nowhere else, while `predict()` needs every one of them on the
+data it scores. A fitted glm carries its own data, so the relation is read
+off the model that uses the column, and `add_groupings()` adds the columns
+from the source columns your portfolio does have.
+
+It takes the same `merge_vars` as
+[`make_rating_table()`](#one-rating-factor-two-columns), and the table runs
+on this same code, so one declaration serves both and the two cannot
+disagree about which policy sits in which group.
+
+```r
+mv <- list(Stedelijkheid = "Stedelijkheid_groep",       # severity: 4-5 together
+           MERK          = c("MERK_GR_F", "MERK_GR_S"),  # grouped differently per model
+           LEEFTIJD      = "LFT_KL")                     # severity: age bands
+
+nieuw <- add_groupings(nieuw, m_freq, m_sev, merge_vars = mv)
+nieuw$Exposure <- 1                                      # a year
+predict(m_freq, nieuw, type = "response") * predict(m_sev, nieuw, type = "response")
+
+tbl <- make_rating_table(m_freq, m_sev, data = dat, merge_vars = mv)
+```
+
+On a portfolio holding only the source columns:
+
+| LEEFTIJD | LFT_KL | Stedelijkheid | Stedelijkheid_groep | MERK | MERK_GR_F | MERK_GR_S |
+|---|---|---|---|---|---|---|
+| 22 | 18-30 | 1 | 1 | BMW | BMW_MERCEDES | BMW_NISSAN |
+| 30 | 18-30 | 3 | 3 | MERCEDES | BMW_MERCEDES | MERCEDES |
+| 31 | 31-50 | 4 | 4-5 | NISSAN | NISSAN | BMW_NISSAN |
+| 50 | 31-50 | 5 | 4-5 | TOYOTA | TOYOTA | TOYOTA |
+| 64 | 51-80 | 2 | 2 | BMW | BMW_MERCEDES | BMW_NISSAN |
+
+Every brand gets the group each model put it in, and the band edges land on
+the right side: 30 is still in 18-30, 31 already in 31-50. For each of
+these policies the premium from `predict()` equals the one built from the
+rating table with the same declaration, BM applied on top.
+
+**What is refused.** Anything that would be a guess is an error, not a
+column with a value in it:
+
+```
+# urbanisation 6, which the claims data never saw
+add_groupings: the value(s) 6 of 'Stedelijkheid' do not occur in the data
+the severity model was fitted on, so their group in 'Stedelijkheid_groep'
+is unknown. A level with no claims has no group there: give it one in that
+model's data, or put 'Stedelijkheid_groep' in 'data' yourself.
+
+# a brand neither model knows
+add_groupings: the value(s) TESLA of 'MERK' do not occur in the data the
+frequency model was fitted on, so their group in 'MERK_GR_F' is unknown.
+Map them to a value the model knows first, or put 'MERK_GR_F' in 'data'
+yourself.
+
+# a grouped column already in the data, disagreeing with the model
+add_groupings: 'MERK_GR_F' does not mean the same thing everywhere: in 1
+row(s) of 'data' it disagrees with the data the frequency model was fitted
+on; row 2 has 'MERK' = MERCEDES and 'MERK_GR_F' = MERCEDES, where the
+model's data says BMW_MERCEDES.
+```
+
+A grouped column that is already in your data is checked, never
+overwritten, so a wrong mapping in a source system is caught rather than
+scored. One column name that the two models group differently is refused
+too, for the reason in [Two groupings, one column name](#7-two-groupings-one-column-name).
+
+**What is not refused.** A continuous source outside the range the model
+was fitted on takes the outer band, with a warning:
+
+```
+add_groupings: 'LEEFTIJD' lies outside the range the severity model was
+fitted on (18 to 80); 1 row above 80 got '51-80', the outer band(s) of
+'LFT_KL'. 'LEEFTIJD' is also a continuous term of the frequency model,
+which extrapolates beyond the range it was fitted on; capping the values,
+pmin(pmax(LEEFTIJD, 18), 80), keeps it from doing so.
+```
+
+The outer bands of a banding are open in practice: nobody over 80 in the
+claims data does not make 85 a new class. The real risk of going outside
+the range sits elsewhere, in a continuous term such as `ns(LEEFTIJD, 4)`,
+which `predict()` extrapolates linearly on the log scale beyond its last
+knot without a word. No grouping can prevent that, so the warning names it
+and the remedy.
+
+**Categorical or continuous** is read off the models: a factor term is
+categorical, a numeric term continuous. A source no model uses directly is
+categorical unless it is numeric with more than 25 distinct values, so a
+numeric code such as urbanisation 1 to 5 is looked up exactly and an unknown
+code is an error, never a neighbouring group.
 
 ### `make_rating_plot()`
 
@@ -1826,6 +1933,7 @@ exposure or prior weight, `a` and `e` actual and expected claims in a cell.
 | [`plot_residual_heatmap()`](#plot_residual_heatmap) | A/E per cell | `Σa / Σe` per cell of two variables | none |
 | [`screen_features()`](#screen_features) | incremental value of a candidate | increase in out-of-sample deviance when the feature is shuffled, baseline margin held fixed | a holdout split; log link |
 | [`make_rating_table()`](#make_rating_table) | multiplicative relativities | `pred(level, rest at base) / pred(base)`; interaction uplift `joint / (mainₓ · main_g)` → [why](#multiplicative-rating-and-the-reconstruction-identity) | log link |
+| [`add_groupings()`](#add_groupings) | the grouped columns a model was fitted on, for new data | the source-to-group relation in the model's own data, exact for a categorical source, nearest value for a band | the model was fitted with `data =` |
 | [`make_rating_plot()`](#make_rating_plot) | those relativities, plotted | none | → [thin cells](#thin-cells) |
 | [`premium_impact()`](#premium_impact) | dislocation against the current tariff | `new/old − 1` per policy, optionally rebased so the totals match | log link, to price at exposure = 1 |
 | [`export_rating_table()`](#export_rating_table) / [`pricing_report()`](#pricing_report) | deliverables | none | none |
@@ -3186,6 +3294,50 @@ skipped variables or interactions, with the reason; thin categorical levels.
 
 **Cost.** A handful of small `predict()` calls per variable, grids are
 tens to hundreds of rows, never `n`.
+
+---
+
+### `add_groupings()` specification
+
+**Purpose.** Add the grouped columns the models were fitted on to a dataset
+that holds only their source columns, so it can be scored.
+
+```r
+add_groupings(data, model_freq = NULL, model_sev = NULL, merge_vars)
+```
+
+| Argument | Type | Default | Meaning |
+|---|---|---|---|
+| `data` | data.frame or data.table | | the dataset to score, holding the source columns |
+| `model_freq`, `model_sev` | glm or NULL | `NULL` | the models that use the grouped columns; at least one, fitted with `data =` |
+| `merge_vars` | named list or vector | | grouped columns per source column, the same declaration as `make_rating_table()` |
+
+**Algorithm.** Per grouped column: find the models that use it; read the
+source-to-group relation off each one's own data; refuse it when it is not
+a function of the source, or when two models define it differently. Decide
+from the models whether the source is categorical (exact lookup) or
+continuous (the band of the nearest value in the model's data), then fill
+the column. A column already in `data` is compared row by row instead of
+written.
+
+**Returns.** `data` with the grouped columns added, each with the type and
+factor levels it has in the model's data. A data.table comes back as a
+data.table; the input is not modified.
+
+**Warnings.** A continuous source outside the fitted range, which takes the
+outer band; the warning also names a model that uses the same source as a
+continuous term. A declared column no model uses, which is left as it is.
+
+**Errors.** No model; no or unnamed `merge_vars`; a source column missing
+from `data`; a column mapped onto itself or declared twice; a grouped
+column no model uses and `data` lacks; a model that carries no data, or
+whose data lacks either column; a grouping that is not a function of its
+source; one name grouped two ways by the two models; a source value the
+model's data never saw; a grouped column in `data` that disagrees with the
+model.
+
+**Cost.** One pass over each model's data and one over `data` per grouped
+column, O(n).
 
 ---
 

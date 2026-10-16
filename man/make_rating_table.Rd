@@ -97,7 +97,9 @@ data, so the relation is read off the model that uses the column and
 the column is derived for \code{data} here. Your data frame is not changed.
 A level that occurs in \code{data} but in no row of that model's data has no
 group to derive, which is an error naming those levels: a level with no
-claims has no severity factor either way.
+claims has no severity factor either way. \code{\link[=add_groupings]{add_groupings()}} runs the
+same derivation on a dataset you want to score, from the same
+declaration.
 
 One grouping per column name. A grouping is often made twice, once in
 each dataset, and the two need not agree: the frequency data may put

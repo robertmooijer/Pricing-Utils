@@ -542,6 +542,192 @@
   gsub("[()`]", "", m)
 }
 
+# ---- grouped columns ---------------------------------------------------------
+# A grouping is made where it is needed - urbanisation 4 and 5 together next
+# to the average claim - so it lives in the data a model was fitted on and
+# often nowhere else. A fitted glm carries that data, so the relation can be
+# read off the model instead of being rebuilt by hand for every dataset that
+# has to be scored. make_rating_table() and add_groupings() share this, so
+# the two cannot drift apart.
+
+# Is a source variable looked up exactly (categorical) or banded
+# (continuous)? The models say so where they can: a factor term is
+# categorical, a numeric term continuous. A source no model uses directly
+# falls back on its own column, where a numeric with few distinct values is
+# a code - urbanisation 1 to 5 - and not a measurement.
+.source_kind <- function(pv, models, src) {
+  for (m in models) {
+    xl <- names(m$xlevels)
+    if (length(xl) && any(vapply(xl, .term_base_var, character(1),
+                                 data = src) == pv)) return("cat")
+  }
+  for (m in models) if (pv %in% .rhs_vars(m)) {
+    md <- if (is.data.frame(m$data)) m$data else NULL
+    if (!is.null(md) && pv %in% names(md) && is.numeric(md[[pv]]))
+      return("cont")
+  }
+  x <- src[[pv]]
+  if (is.numeric(x) && data.table::uniqueN(x, na.rm = TRUE) > 25) "cont"
+  else "cat"
+}
+
+# The grouped column `a` of source `pv`, for the rows of `data`: derived from
+# the data of the model that uses it when `data` does not have it, and
+# checked against that model when it does. Returns the column.
+#
+# Refused rather than guessed: a source value the model's data never saw
+# (a level with no claims has no group there), a grouping that is not a
+# function of its source, and one column name that two models group
+# differently. A continuous source outside the fitted range is not refused:
+# the outer bands of a banding are open in practice - nobody older than 80
+# in the claims data does not make 85 a new class - so it takes the outer
+# band, with a warning.
+.grouping_column <- function(data, pv, a, model_freq, model_sev, fn) {
+  models <- list(frequency = model_freq, severity = model_sev)
+  models <- models[!vapply(models, is.null, logical(1))]
+  owners <- models[vapply(models, function(m) a %in% .rhs_vars(m),
+                          logical(1))]
+  have   <- a %in% names(data)
+  if (!length(owners)) {
+    if (have) return(data[[a]])
+    stop(fn, ": '", a, "' is not a column of 'data' and no model uses it, ",
+         "so there is nothing to merge.", call. = FALSE)
+  }
+
+  # the relation as each model that uses the column knows it
+  maps <- list()
+  for (nm in names(owners)) {
+    m   <- owners[[nm]]
+    # a model fitted without data = carries its environment here, not a table
+    src <- if (is.data.frame(m$data)) .as_df(m$data) else NULL
+    if (is.null(src)) {
+      if (have) next
+      stop(fn, ": '", a, "' is not a column of 'data'. It could be taken ",
+           "from the data the ", nm, " model was fitted on, but that model ",
+           "carries none; fit it with a 'data =' argument, or add the column ",
+           "to 'data' yourself.", call. = FALSE)
+    }
+    if (!all(c(pv, a) %in% names(src))) {
+      if (have) next
+      stop(fn, ": '", a, "' is not a column of 'data', and the data the ", nm,
+           " model was fitted on has no column '",
+           if (!pv %in% names(src)) pv else a, "', so the relation between ",
+           "the two cannot be read off anywhere. Add the column to 'data'.",
+           call. = FALSE)
+    }
+    ok <- !is.na(src[[pv]]) & !is.na(src[[a]])
+    pr <- as.data.frame(unique(data.table::data.table(
+      p = as.character(src[[pv]])[ok], g = as.character(src[[a]])[ok])))
+    dup <- unique(pr$p[duplicated(pr$p)])
+    if (length(dup))
+      stop(fn, ": '", a, "' is not a regrouping of '", pv, "' in the data ",
+           "the ", nm, " model was fitted on: the value(s) ",
+           paste(utils::head(dup, 5), collapse = ", "),
+           " occur there with more than one group.", call. = FALSE)
+    maps[[nm]] <- list(map = stats::setNames(pr$g, pr$p), src = src)
+  }
+  if (!length(maps)) return(data[[a]])     # nothing to check it against
+
+  # One column name, two meanings. A grouping made twice, once per dataset,
+  # need not agree, and only one of the two can be in a dataset that is
+  # scored. With different labels that ends in a prediction failure; with
+  # the same labels nothing fails and one model is quietly read on the
+  # other's grouping.
+  if (length(maps) == 2) {
+    m1  <- maps[[1]]$map; m2 <- maps[[2]]$map
+    sh  <- intersect(names(m1), names(m2))
+    off <- sh[m1[sh] != m2[sh]]
+    if (length(off))
+      stop(fn, ": '", a, "' does not mean the same thing everywhere: '",
+           off[1], "' of '", pv, "' is '", m1[[off[1]]], "' in the data the ",
+           names(maps)[1], " model was fitted on and '", m2[[off[1]]],
+           "' in the data the ", names(maps)[2], " model was fitted on",
+           if (length(off) > 1) paste0(" (", length(off), " values differ)"),
+           ". Two groupings of one variable cannot share a column name: give ",
+           "them separate names and name both in 'merge_vars', as ",
+           "merge_vars = list(", pv, " = c(\"", a, "_freq\", \"", a,
+           "_sev\")).", call. = FALSE)
+  }
+  owner_nm <- names(maps)[1]
+  map  <- maps[[1]]$map
+  if (length(maps) == 2) {
+    extra <- setdiff(names(maps[[2]]$map), names(map))
+    map   <- c(map, maps[[2]]$map[extra])
+  }
+  src  <- maps[[1]]$src
+  kind <- .source_kind(pv, models, src)
+  x    <- data[[pv]]
+
+  if (kind == "cont") {
+    keys <- suppressWarnings(as.numeric(names(map)))
+    o    <- order(keys); keys <- keys[o]; band <- unname(map)[o]
+    xv   <- suppressWarnings(as.numeric(as.character(x)))
+    brks <- c(-Inf, keys[-1] - diff(keys) / 2, Inf)
+    vals <- band[findInterval(xv, brks)]
+    vals[is.na(xv)] <- NA
+    lo <- !is.na(xv) & xv < keys[1]
+    hi <- !is.na(xv) & xv > keys[length(keys)]
+    if (!have && (any(lo) || any(hi))) {
+      rows <- function(k) paste(k, if (k == 1) "row" else "rows")
+      bits <- c(if (any(hi)) sprintf("%s above %s got '%s'", rows(sum(hi)),
+                                     format(keys[length(keys)]),
+                                     band[length(band)]),
+                if (any(lo)) sprintf("%s below %s got '%s'", rows(sum(lo)),
+                                     format(keys[1]), band[1]))
+      also <- names(models)[vapply(models, function(m)
+        pv %in% .rhs_vars(m) && is.null(m$xlevels[[pv]]), logical(1))]
+      warning(fn, ": '", pv, "' lies outside the range the ", owner_nm,
+              " model was fitted on (", format(keys[1]), " to ",
+              format(keys[length(keys)]), "); ",
+              paste(bits, collapse = " and "), ", the outer band(s) of '",
+              a, "'.",
+              if (length(also))
+                paste0(" '", pv, "' is also a continuous term of the ",
+                       paste(also, collapse = " and "), " model, which ",
+                       "extrapolates beyond the range it was fitted on; ",
+                       "capping the values, pmin(pmax(", pv, ", ",
+                       format(keys[1]), "), ", format(keys[length(keys)]),
+                       "), keeps it from doing so."),
+              call. = FALSE)
+    }
+  } else {
+    vals <- unname(map[as.character(x)])
+    miss <- unique(as.character(x)[is.na(vals) & !is.na(x)])
+    if (length(miss))
+      stop(fn, ": the value(s) ", paste(utils::head(miss, 5), collapse = ", "),
+           if (length(miss) > 5) paste0(" and ", length(miss) - 5, " more"),
+           " of '", pv, "' do not occur in the data the ", owner_nm,
+           " model was fitted on, so their group in '", a, "' is unknown. ",
+           if (owner_nm == "severity")
+             paste0("A level with no claims has no group there: give it one ",
+                    "in that model's data, or put '", a, "' in 'data' ",
+                    "yourself.")
+           else
+             paste0("Map them to a value the model knows first, or put '", a,
+                    "' in 'data' yourself."),
+           call. = FALSE)
+  }
+
+  tmpl <- src[[a]]
+  vals <- if (is.factor(tmpl)) factor(vals, levels = levels(tmpl))
+          else if (is.numeric(tmpl)) as.numeric(vals)
+          else vals
+
+  if (!have) return(vals)
+  # Already there: checked, not overwritten. A column that disagrees with
+  # the model would have that model scored on a grouping it never saw.
+  cur <- as.character(data[[a]])
+  bad <- which(!is.na(cur) & !is.na(vals) & cur != as.character(vals))
+  if (length(bad))
+    stop(fn, ": '", a, "' does not mean the same thing everywhere: in ",
+         length(bad), " row(s) of 'data' it disagrees with the data the ",
+         owner_nm, " model was fitted on; row ", bad[1], " has '", pv,
+         "' = ", as.character(x[bad[1]]), " and '", a, "' = ", cur[bad[1]],
+         ", where the model's data says ", as.character(vals[bad[1]]), ".",
+         call. = FALSE)
+  data[[a]]
+}
+
 # Base variables of a model that exist as columns in `data`
 # (interaction terms split into their components, deduplicated)
 .model_base_vars <- function(model, data) {

@@ -84,7 +84,9 @@
 #'   the column is derived for `data` here. Your data frame is not changed.
 #'   A level that occurs in `data` but in no row of that model's data has no
 #'   group to derive, which is an error naming those levels: a level with no
-#'   claims has no severity factor either way.
+#'   claims has no severity factor either way. [add_groupings()] runs the
+#'   same derivation on a dataset you want to score, from the same
+#'   declaration.
 #'
 #'   One grouping per column name. A grouping is often made twice, once in
 #'   each dataset, and the two need not agree: the frequency data may put
@@ -207,76 +209,6 @@ make_rating_table <- function(model_freq = NULL,
   alias_of  <- list()   # variable -> its aliases
   level_map <- list()   # alias -> lookup from the variable's value
 
-  # The regrouped column often lives only in the dataset the severity model
-  # was fitted on: it was made there, next to the average claim, and `data`
-  # is the whole portfolio. A fitted glm carries its own data, so the
-  # relation can be read off the model rather than asked of the user a
-  # second time. Derived here, once, and from then on it is an ordinary
-  # column of `data`.
-  derive_alias <- function(pv, a) {
-    owner <- NULL; owner_nm <- NULL
-    for (mm in list(list(m = model_freq, nm = "frequency"),
-                    list(m = model_sev,  nm = "severity")))
-      if (!is.null(mm$m) && a %in% .rhs_vars(mm$m)) {
-        owner <- mm$m; owner_nm <- mm$nm; break
-      }
-    if (is.null(owner))
-      stop("make_rating_table: '", a, "' is not a column of 'data' and no ",
-           "model uses it, so there is nothing to merge.", call. = FALSE)
-    # A model fitted without data = carries its environment here, not a
-    # table, and there is nothing to read a relation off
-    src <- if (is.data.frame(owner$data)) .as_df(owner$data) else NULL
-    if (is.null(src))
-      stop("make_rating_table: '", a, "' is not a column of 'data'. It could ",
-           "be taken from the data the ", owner_nm, " model was fitted on, ",
-           "but that model carries none; fit it with a 'data =' argument, or ",
-           "add the column to 'data' yourself.", call. = FALSE)
-    if (!all(c(pv, a) %in% names(src)))
-      stop("make_rating_table: '", a, "' is not a column of 'data', and the ",
-           "data the ", owner_nm, " model was fitted on has no column '",
-           if (!pv %in% names(src)) pv else a, "', so the relation between ",
-           "the two cannot be read off anywhere. Add the column to 'data'.",
-           call. = FALSE)
-
-    ok <- !is.na(src[[pv]]) & !is.na(src[[a]])
-    pr <- unique(data.frame(p = as.character(src[[pv]])[ok],
-                            a = as.character(src[[a]])[ok],
-                            stringsAsFactors = FALSE))
-    dup <- unique(pr$p[duplicated(pr$p)])
-    if (length(dup))
-      stop("make_rating_table: '", a, "' is not a regrouping of '", pv,
-           "' in the data the ", owner_nm, " model was fitted on: the ",
-           "value(s) ", paste(utils::head(dup, 5), collapse = ", "),
-           " occur there with more than one group.", call. = FALSE)
-
-    x <- data[[pv]]
-    if (!var_is_cat(pv) && is.numeric(x)) {
-      # A band covers a run of values, so a value the model never saw takes
-      # the band of the nearest one it did
-      o    <- order(as.numeric(pr$p))
-      num  <- as.numeric(pr$p)[o]; val <- pr$a[o]
-      brks <- c(-Inf, num[-1] - diff(num) / 2, Inf)
-      vals <- val[findInterval(as.numeric(x), brks)]
-    } else {
-      vals <- unname(stats::setNames(pr$a, pr$p)[as.character(x)])
-      # A level with no claims at all is in no row of the severity data, so
-      # it has no group there and there is nothing to assign it.
-      miss <- unique(c(as.character(x)[is.na(vals) & !is.na(x)],
-                       setdiff(var_levels(pv), pr$p)))
-      if (length(miss))
-        stop("make_rating_table: the value(s) ",
-             paste(utils::head(miss, 5), collapse = ", "), " of '", pv,
-             "' do not occur in the data the ", owner_nm, " model was fitted ",
-             "on, so their group in '", a, "' is unknown. A level with no ",
-             "claims has no group there: give it one in that model's data, ",
-             "or put '", a, "' in 'data' yourself.", call. = FALSE)
-    }
-    tmpl <- src[[a]]
-    if (is.factor(tmpl)) factor(vals, levels = levels(tmpl))
-    else if (is.numeric(tmpl)) as.numeric(vals)
-    else vals
-  }
-
   if (!is.null(merge_vars)) {
     merge_vars <- as.list(merge_vars)
     if (is.null(names(merge_vars)) || any(!nzchar(names(merge_vars))))
@@ -297,10 +229,11 @@ make_rating_table <- function(model_freq = NULL,
           stop("make_rating_table: '", a, "' is both a regrouping of '", pv,
                "' and the variable '", paste(alias_of[[a]], collapse = ", "),
                "' is merged into; chains are not supported.", call. = FALSE)
-        if (!a %in% names(data)) {
-          data[[a]] <- derive_alias(pv, a)
-          data.table::set(d_dt, j = a, value = data[[a]])
-        }
+        # Derived from the model that uses it when `data` lacks it, checked
+        # against that model when `data` has it; shared with add_groupings()
+        data[[a]] <- .grouping_column(data, pv, a, model_freq, model_sev,
+                                      "make_rating_table")
+        data.table::set(d_dt, j = a, value = data[[a]])
         # The relation has to be a function of the variable: one group per
         # value. If a value occurs with two groups there is no single
         # factor to put on that row, and silently taking the first would
@@ -316,40 +249,6 @@ make_rating_table <- function(model_freq = NULL,
                "': the value(s) ", paste(utils::head(bad, 5), collapse = ", "),
                " of '", pv, "' occur with more than one value of '", a,
                "', so no single factor belongs to them.", call. = FALSE)
-        # One column name, two meanings. A grouping is often made twice,
-        # once in each dataset, and the two need not agree: the frequency
-        # data may put brand C with D while the severity data puts it with
-        # A and B. Only one of the two can go in `data`, so the other model
-        # would be read on a grouping it was not fitted on. When the labels
-        # differ that ends in a prediction failure, but when both groupings
-        # happen to use the same labels nothing fails and the factors are
-        # quietly wrong, which is why the two are compared here.
-        for (ow in list(list(m = model_freq, nm = "frequency"),
-                        list(m = model_sev,  nm = "severity"))) {
-          if (is.null(ow$m) || !a %in% .rhs_vars(ow$m)) next
-          sd <- if (is.data.frame(ow$m$data)) ow$m$data else NULL
-          if (is.null(sd) || !all(c(pv, a) %in% names(sd))) next
-          ok2 <- !is.na(sd[[pv]]) & !is.na(sd[[a]])
-          mp  <- unique(data.frame(p = as.character(sd[[pv]])[ok2],
-                                   a = as.character(sd[[a]])[ok2],
-                                   stringsAsFactors = FALSE))
-          mp  <- mp[!duplicated(mp$p), ]
-          own <- stats::setNames(mp$a, mp$p)
-          here <- stats::setNames(pr$a, pr$p)
-          shared <- intersect(names(own), names(here))
-          off <- shared[own[shared] != here[shared]]
-          if (length(off))
-            stop("make_rating_table: '", a, "' does not mean the same thing ",
-                 "everywhere: '", off[1], "' of '", pv, "' is '",
-                 here[[off[1]]], "' in 'data' and '", own[[off[1]]],
-                 "' in the data the ", ow$nm, " model was fitted on",
-                 if (length(off) > 1)
-                   paste0(" (", length(off), " values differ)"),
-                 ". Two groupings of one variable cannot share a column ",
-                 "name: give them separate names and name both in ",
-                 "'merge_vars', as merge_vars = list(", pv, " = c(\"", a,
-                 "_freq\", \"", a, "_sev\")).", call. = FALSE)
-        }
         if (!var_is_cat(pv) && is.numeric(data[[pv]])) {
           o <- order(as.numeric(pr$p))
           level_map[[a]] <- list(num = as.numeric(pr$p)[o], val = pr$a[o])
