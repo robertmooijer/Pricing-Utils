@@ -18,7 +18,8 @@ premium_impact(
   exposure_col = "Exposure",
   spotlight = NULL,
   x_range = NULL,
-  y_range = NULL
+  y_range = NULL,
+  keep_offsets = TRUE
 )
 }
 \arguments{
@@ -28,7 +29,10 @@ premium_impact(
 
 \item{model_freq_old, model_sev_old}{The old models, or:}
 
-\item{old_premium_col}{Column in \code{data} with the current premium.}
+\item{old_premium_col}{Column in \code{data} with the current premium. It
+has to be on the same footing as the new rate: with the default
+\code{keep_offsets = TRUE} that is the premium \strong{including} the
+bonus-malus discount, which is what a policy record normally holds.}
 
 \item{old_premium_basis}{\code{"amount"} (default; premium for the record,
 divided by exposure internally) or \code{"rate"} (already per unit of
@@ -62,6 +66,26 @@ axis you normally want to align - and \code{y_range} the exposure axis.
 Both \code{NULL} (default) auto-scale. Note that \code{x_range} only sets the
 visible window; the bins are always computed over the full range of
 changes, so the summary statistics are unaffected.}
+
+\item{keep_offsets}{\code{TRUE} (default): only the exposure offset is taken
+out of the rate, and any other offset - a bonus-malus scale carried as
+\code{offset(log(BM))} - stays in, so the rate is what the policy pays for a
+year. \code{FALSE} takes every offset out, which puts every policy at the
+class without discount.
+
+Keeping it in is what makes a comparison with a current premium fair.
+That premium includes the discount, and taking the discount out of the
+new side only makes an unchanged tariff look like a large shift onto
+the discounted classes: +33\% for a 40\% discount and -20\% for none, on a
+tariff that changed nothing. Against old models with the same offset
+the choice does not matter for the changes, which are identical either
+way; it moves \code{OldRate} and \code{NewRate} themselves.
+
+Two cases fall back to taking everything out: a model whose offset is
+not on \code{exposure_col} at all, and an offset that holds the exposure
+and something else in one expression, \code{offset(log(Exposure * BM))},
+which is reported in a warning. The \code{summary} names the offsets that
+stayed in.}
 }
 \value{
 A list with \code{summary} (display table with the headline numbers),
@@ -76,9 +100,11 @@ the premium changes, with the spotlight overlaid).
 \description{
 Compares premiums under a new model set against an old model set (or an
 existing premium column) on a per-policy basis. Premiums are computed as
-rates per unit of exposure (offsets neutralised at exposure = 1); the
-premium is the product of the models supplied (frequency x severity, or
-a single model when only one side is modelled).
+rates per unit of exposure: the exposure offset is taken out, so every
+policy is priced for a full year, while any other offset - a bonus-malus
+scale - stays in by default (see \code{keep_offsets}). The premium is the
+product of the models supplied (frequency x severity, or a single model
+when only one side is modelled).
 }
 \details{
 By default the new premiums are rebased so that the exposure-weighted

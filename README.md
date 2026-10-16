@@ -1466,7 +1466,7 @@ expensive ones?*
 model_lift(model_freq = NULL, model_sev = NULL, data = NULL,
            actual_col = "SCHADELAST", exposure_col = "Exposure",
            claims_col = "AantalClaims", weight_col = NULL,
-           n_bins = 10, y_range = NULL)
+           n_bins = 10, y_range = NULL, keep_offsets = TRUE)
 ```
 
 **What it does.** Every other diagnostic here looks at one variable. This
@@ -1537,7 +1537,8 @@ double_lift(data, model_freq_new = NULL, model_sev_new = NULL,
             old_premium_col = NULL,
             old_premium_basis = c("amount", "rate"),
             actual_col = "SCHADELAST", exposure_col = "Exposure",
-            n_bins = 10, rebase = TRUE, y_range = NULL)
+            n_bins = 10, rebase = TRUE, y_range = NULL,
+            keep_offsets = TRUE)
 ```
 
 **The question it answers:** *my new tariff and my old one disagree about
@@ -1603,7 +1604,8 @@ double_lift(data, model_freq_new = NULL, model_sev_new = NULL,
             old_premium_col = NULL,
             old_premium_basis = c("amount", "rate"),
             actual_col = "SCHADELAST", exposure_col = "Exposure",
-            n_bins = 10, rebase = TRUE, y_range = NULL)
+            n_bins = 10, rebase = TRUE, y_range = NULL,
+            keep_offsets = TRUE)
 ```
 
 Same arguments as [`premium_impact()`](#premium_impact): either two model
@@ -1622,20 +1624,56 @@ premium_impact(data,
                old_premium_basis = c("amount", "rate"),
                rebase = TRUE, by = NULL, n_show = 10,
                exposure_col = "Exposure", spotlight = NULL,
-               x_range = NULL, y_range = NULL)
+               x_range = NULL, y_range = NULL, keep_offsets = TRUE)
 ```
 
-Premiums are computed as **rates per unit of exposure** (offsets neutralised
-at exposure = 1); the premium is the product of the models supplied. The old
-side is either a model pair or `old_premium_col`, a column with the current
-premium, interpreted as an amount for the record (`"amount"`, divided by
-exposure internally) or as a rate (`"rate"`).
+Premiums are computed as **rates per unit of exposure**: the exposure offset
+is taken out, so every policy is priced for a full year, and the premium is
+the product of the models supplied. The old side is either a model pair or
+`old_premium_col`, a column with the current premium, interpreted as an
+amount for the record (`"amount"`, divided by exposure internally) or as a
+rate (`"rate"`).
 
 With `rebase = TRUE` (default) the new premiums are scaled so the
 exposure-weighted totals match the old ones. That separates the two
 questions a dislocation analysis answers: the overall **rate-level change**
 (reported in the summary) and the **redistribution** across the portfolio
 (the histogram and quantiles).
+
+**A bonus-malus scale as an offset.** A model may carry a known discount
+next to the exposure, `offset(log(Exposure)) + offset(log(BM_KORTING))`. The
+two are treated differently, because they mean different things: the
+exposure says how long a policy was on risk, the BM says how much it pays.
+By default only the exposure is taken out, and the BM stays in the rate, so
+`NewRate` is what the policy pays for a year, discount included. That is
+what a current premium column holds as well, so the comparison is like for
+like.
+
+Taking the BM out of the new side only does real damage. Measured with an
+old premium that is exactly the new tariff, so that the true change is 0%
+for every policy:
+
+| BM class | Discount | Mean change, BM taken out | Mean change, BM kept (default) |
+|---|---|---|---|
+| 1 | 0% | -20.0% | 0.0% |
+| 2 | 10% | -11.1% | 0.0% |
+| 3 | 20% | 0.0% | 0.0% |
+| 4 | 30% | +14.3% | 0.0% |
+| 5 | 40% | +33.3% | 0.0% |
+
+An unchanged tariff would have looked like a large shift onto the
+discounted classes. The summary has a line `Offsets kept in the rate`, so
+the output says what its rates are on.
+
+`keep_offsets = FALSE` takes every offset out and puts every policy at the
+class without discount. Use it only against an old premium that is also
+before discount; dividing a premium including discount by the BM yourself
+and keeping the default would take the discount out twice. Against old
+models with the same offset the choice does not matter for the changes,
+which are identical either way. Two cases fall back to taking everything
+out: a model whose offset is not on `exposure_col` at all, and one
+expression that holds both, `offset(log(Exposure * BM))`, which cannot be
+split and is reported in a warning; write it as two terms to keep the BM.
 
 **Returns** a list: `summary` (display table), `stats` (the same numbers as
 a named list), `policy` (per-row old/new/percent change), `by_level`
@@ -2647,7 +2685,7 @@ factors of that term, not the model's predictions.
 model_lift(model_freq = NULL, model_sev = NULL, data = NULL,
            actual_col = "SCHADELAST", exposure_col = "Exposure",
            claims_col = "AantalClaims", weight_col = NULL,
-           n_bins = 10, y_range = NULL)
+           n_bins = 10, y_range = NULL, keep_offsets = TRUE)
 ```
 
 | Argument | Type | Default | Meaning |
@@ -2655,8 +2693,9 @@ model_lift(model_freq = NULL, model_sev = NULL, data = NULL,
 | `model_freq`, `model_sev` | glm or NULL | `NULL` | supply both for a risk premium, one for a frequency- or severity-only lift |
 | `data` | data.frame or NULL | `NULL` | evaluation data; `NULL` uses the model's own rows (in-sample, labelled on the plot) |
 | `actual_col` | character(1) | `"SCHADELAST"` | realised amount: loss for a premium model, claim count for a frequency model |
-| `exposure_col` | character(1) | `"Exposure"` | the column held at 1 to neutralise a model's offset |
+| `exposure_col` | character(1) | `"Exposure"` | the exposure; the offset on this column is taken out of the prediction |
 | `claims_col` | character(1) | `"AantalClaims"` | weight for a severity-only lift |
+| `keep_offsets` | logical(1) | `TRUE` | keep every other offset, such as a BM scale, in the prediction; `FALSE` takes all offsets out |
 | `weight_col` | character(1) or NULL | `NULL` | column to bin and weight on; `NULL` picks it from the models (see below) |
 | `n_bins` | integer | `10` | bins of equal weight |
 
@@ -2671,8 +2710,13 @@ volume bars. Set `weight_col` explicitly only to override it.
 
 **Algorithm.**
 
-1. Predict a rate per unit of exposure from each model with the offset
-   neutralised, and multiply them.
+1. Predict a rate per unit of exposure from each model with the exposure
+   offset taken out, and multiply them. Any other offset, such as a
+   bonus-malus scale, stays in: the claims being compared against happened
+   at each policy's own BM. Taking it out as well put every policy at the
+   class without discount, and a correct model then read as much too
+   expensive as the average discount, in every bin; on a book with an
+   average discount of 20%, an in-sample A/E of 1.000 came out as 0.800.
 2. Drop rows with non-finite values or non-positive exposure, with a
    warning counting them.
 3. Order by predicted rate and assign bins by **cumulative weight**, so
@@ -2707,7 +2751,8 @@ double_lift(data, model_freq_new = NULL, model_sev_new = NULL,
             old_premium_col = NULL,
             old_premium_basis = c("amount", "rate"),
             actual_col = "SCHADELAST", exposure_col = "Exposure",
-            n_bins = 10, rebase = TRUE, y_range = NULL)
+            n_bins = 10, rebase = TRUE, y_range = NULL,
+            keep_offsets = TRUE)
 ```
 
 **Algorithm.** Compute both rates through the same helper
@@ -3176,21 +3221,23 @@ premium_impact(data, model_freq_new = NULL, model_sev_new = NULL,
                old_premium_col = NULL,
                old_premium_basis = c("amount", "rate"),
                rebase = TRUE, by = NULL, n_show = 10,
-               exposure_col = "Exposure", x_range = NULL, y_range = NULL)
+               exposure_col = "Exposure", x_range = NULL, y_range = NULL,
+               keep_offsets = TRUE)
 ```
 
 | Argument | Type | Default | Meaning |
 |---|---|---|---|
 | `old_premium_basis` | character(1) | `"amount"` | `"amount"` = premium for the record, divided by exposure internally; `"rate"` = already per unit of exposure |
+| `keep_offsets` | logical(1) | `TRUE` | take only the exposure offset out and keep any other, such as a BM scale; `FALSE` takes all out. An old premium column has to be on the same footing |
 | `rebase` | logical(1) | `TRUE` | scale new premiums so the exposure-weighted totals match the old |
 | `by` | character or NULL | `NULL` | columns for a per-level breakdown |
 | `n_show` | integer | `10` | rows in the winners/losers tables |
 | `spotlight` | expression, logical or NULL | `NULL` | subset to report separately, evaluated against `data`; the book itself is still analysed in full |
 | `x_range`, `y_range` | numeric(2) or NULL | `NULL` | fix the histogram axes; `x_range` bounds the change axis and only sets the visible window, the bins always span the full range, so the statistics are unaffected |
 
-**Algorithm.** Predict both sides as rates per unit of exposure (offsets
-neutralised at exposure = 1); the premium is the product of the models
-supplied. Drop rows with a non-finite or non-positive premium or exposure.
+**Algorithm.** Predict both sides as rates per unit of exposure, with the
+exposure offset taken out and any other offset kept (see `keep_offsets`);
+the premium is the product of the models supplied. Drop rows with a non-finite or non-positive premium or exposure.
 Compute the overall rate-level change, apply the rebase factor when asked,
 then the per-policy change. Quantiles are exposure-weighted. The histogram
 is pre-binned in R into 60 bars, because a plotly histogram trace would

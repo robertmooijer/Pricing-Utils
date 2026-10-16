@@ -2,9 +2,11 @@
 #'
 #' Compares premiums under a new model set against an old model set (or an
 #' existing premium column) on a per-policy basis. Premiums are computed as
-#' rates per unit of exposure (offsets neutralised at exposure = 1); the
-#' premium is the product of the models supplied (frequency x severity, or
-#' a single model when only one side is modelled).
+#' rates per unit of exposure: the exposure offset is taken out, so every
+#' policy is priced for a full year, while any other offset - a bonus-malus
+#' scale - stays in by default (see `keep_offsets`). The premium is the
+#' product of the models supplied (frequency x severity, or a single model
+#' when only one side is modelled).
 #'
 #' By default the new premiums are rebased so that the exposure-weighted
 #' totals match the old ones. That isolates the redistribution
@@ -14,10 +16,32 @@
 #' @param data Dataset with raw rows.
 #' @param model_freq_new,model_sev_new The new (candidate) models.
 #' @param model_freq_old,model_sev_old The old models, or:
-#' @param old_premium_col Column in `data` with the current premium.
+#' @param old_premium_col Column in `data` with the current premium. It
+#'   has to be on the same footing as the new rate: with the default
+#'   `keep_offsets = TRUE` that is the premium **including** the
+#'   bonus-malus discount, which is what a policy record normally holds.
 #' @param old_premium_basis `"amount"` (default; premium for the record,
 #'   divided by exposure internally) or `"rate"` (already per unit of
 #'   exposure).
+#' @param keep_offsets `TRUE` (default): only the exposure offset is taken
+#'   out of the rate, and any other offset - a bonus-malus scale carried as
+#'   `offset(log(BM))` - stays in, so the rate is what the policy pays for a
+#'   year. `FALSE` takes every offset out, which puts every policy at the
+#'   class without discount.
+#'
+#'   Keeping it in is what makes a comparison with a current premium fair.
+#'   That premium includes the discount, and taking the discount out of the
+#'   new side only makes an unchanged tariff look like a large shift onto
+#'   the discounted classes: +33% for a 40% discount and -20% for none, on a
+#'   tariff that changed nothing. Against old models with the same offset
+#'   the choice does not matter for the changes, which are identical either
+#'   way; it moves `OldRate` and `NewRate` themselves.
+#'
+#'   Two cases fall back to taking everything out: a model whose offset is
+#'   not on `exposure_col` at all, and an offset that holds the exposure
+#'   and something else in one expression, `offset(log(Exposure * BM))`,
+#'   which is reported in a warning. The `summary` names the offsets that
+#'   stayed in.
 #' @param rebase `TRUE` = scale new premiums to the old total (default).
 #' @param by Optional character vector of columns for a per-level impact
 #'   breakdown. Besides the exposure-weighted mean change per level, this
@@ -70,9 +94,14 @@ premium_impact <- function(data,
                            exposure_col = "Exposure",
                            spotlight    = NULL,
                            x_range      = NULL,
-                           y_range      = NULL) {
+                           y_range      = NULL,
+                           keep_offsets = TRUE) {
 
   old_premium_basis <- match.arg(old_premium_basis)
+  if (!is.logical(keep_offsets) || length(keep_offsets) != 1 ||
+      is.na(keep_offsets))
+    stop("premium_impact: 'keep_offsets' must be TRUE or FALSE.",
+         call. = FALSE)
   x_range <- .check_range(x_range, "premium_impact", "x_range")
   y_range <- .check_range(y_range, "premium_impact")
   .check_cols(data, c(exposure_col, by, old_premium_col), "premium_impact")
@@ -99,7 +128,8 @@ premium_impact <- function(data,
 
   r <- .old_new_rates(data, model_freq_new, model_sev_new,
                       model_freq_old, model_sev_old, old_premium_col,
-                      old_premium_basis, exposure_col, "premium_impact")
+                      old_premium_basis, exposure_col, "premium_impact",
+                      keep_offsets)
   new_rate <- r$new
   old_rate <- r$old
 
@@ -217,7 +247,8 @@ premium_impact <- function(data,
                "P5 .. P95 change (exposure-weighted)",
                "Exposure share |change| > 10%",
                "Exposure share |change| > 25%",
-               "Rows used / dropped"),
+               "Rows used / dropped",
+               "Offsets kept in the rate"),
     Value = c(format(round(old_total), big.mark = ","),
               format(round(new_total), big.mark = ","),
               sprintf("%+.1f%%", 100 * rate_change),
@@ -226,7 +257,8 @@ premium_impact <- function(data,
               sprintf("%+.1f%% .. %+.1f%%", qs[1], qs[5]),
               sprintf("%.1f%%", 100 * share10),
               sprintf("%.1f%%", 100 * share25),
-              paste0(length(idx), " / ", n_drop)),
+              paste0(length(idx), " / ", n_drop),
+              .kept_label(r$kept)),
     stringsAsFactors = FALSE
   )
 
@@ -306,7 +338,8 @@ premium_impact <- function(data,
                                 quantiles = stats::setNames(qs,
                                   c("p5", "p25", "p50", "p75", "p95")),
                                 share_gt_10 = share10, share_gt_25 = share25,
-                                n_rows = length(idx), n_dropped = n_drop),
+                                n_rows = length(idx), n_dropped = n_drop,
+                                offsets_kept = r$kept),
        policy            = policy,
        by_level          = by_level,
        spotlight         = spotlight_res,

@@ -16,7 +16,8 @@ double_lift(
   exposure_col = "Exposure",
   n_bins = 10,
   rebase = TRUE,
-  y_range = NULL
+  y_range = NULL,
+  keep_offsets = TRUE
 )
 }
 \arguments{
@@ -42,6 +43,12 @@ internally) or \code{"rate"} (already per unit of exposure).}
 exposure-weighted totals match, isolating differentiation from level.}
 
 \item{y_range}{Optional \code{c(lo, hi)} to fix the A/E axis.}
+
+\item{keep_offsets}{\code{TRUE} (default): only the exposure offset is taken
+out of both rates, and any other offset - a bonus-malus scale - stays
+in, as it must for an A/E against claims that happened at each
+policy's own BM. An old premium column must then include the discount
+too. \code{FALSE} takes every offset out. See \code{\link[=premium_impact]{premium_impact()}}.}
 }
 \value{
 A list with \code{table} (per bin: exposure, the mean rate ratio, and

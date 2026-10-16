@@ -205,8 +205,13 @@
 # The offset's contribution to the linear predictor, evaluated on new data.
 # Derived rather than assumed, so offset(Exposure), offset(log(Months / 12)),
 # several offset terms at once and the offset = argument all come out right.
-.offset_value <- function(model, data) {
+#
+# `idx` limits it to some of the offset expressions, so the exposure part
+# can be taken out while a known relativity such as a bonus-malus scale
+# stays in.
+.offset_value <- function(model, data, idx = NULL) {
   ex <- .offset_exprs(model)
+  if (!is.null(idx)) ex <- ex[idx]
   if (!length(ex)) return(rep(0, nrow(data)))
   env <- environment(formula(model))
   v <- lapply(ex, function(e) as.numeric(eval(e, data, env)))
@@ -235,9 +240,47 @@
 # Callers may still pin the offset columns to a constant before calling
 # this - make_pdp() does, because that is what lets it collapse the data to
 # unique predictor profiles - and the result is the same either way.
-.predict_no_offset <- function(model, newdata) {
+.predict_no_offset <- function(model, newdata, idx = NULL) {
   eta <- as.numeric(predict(model, newdata = newdata, type = "link"))
-  family(model)$linkinv(eta - .offset_value(model, newdata))
+  family(model)$linkinv(eta - .offset_value(model, newdata, idx))
+}
+
+# Which offset expressions to take out of a rate, and which stay in.
+#
+# The exposure offset says how long a policy was on risk, which is not a
+# property of the risk: it goes. Any other offset is a known relativity of
+# that policy - a bonus-malus scale is the usual one - and every comparison
+# a rate is used for holds it against something that includes it: the
+# premium the customer pays, the claims that actually happened. Taking it
+# out as well put every policy at the no-discount class, so a correct model
+# read about 20% too expensive against its own claims on a book with an
+# average discount of 20%.
+#
+# Two cases cannot be split and fall back to taking everything out: an
+# offset that is not on `exposure_col` at all (the model offsets on months,
+# say, which is an exposure under another name), and one expression that
+# holds the exposure together with something else, log(Exposure * BM).
+.offset_split <- function(model, exposure_col, keep_offsets = TRUE) {
+  ex <- .offset_exprs(model)
+  n  <- length(ex)
+  if (!n) return(list(drop = integer(0), kept = character(0), mixed = NULL))
+  vars    <- lapply(ex, all.vars)
+  on_expo <- vapply(vars, function(v) exposure_col %in% v, logical(1))
+  if (!isTRUE(keep_offsets) || !any(on_expo))
+    return(list(drop = seq_len(n), kept = character(0), mixed = NULL))
+  mixed <- which(on_expo & lengths(vars) > 1L)
+  kept  <- unique(unlist(vars[!on_expo]))
+  list(drop  = which(on_expo),
+       kept  = if (is.null(kept)) character(0) else kept,
+       mixed = if (length(mixed))
+         setdiff(unique(unlist(vars[mixed])), exposure_col) else NULL)
+}
+
+# The offsets that stay in the rate, for the output to say what it is on.
+.kept_offsets <- function(models, exposure_col, keep_offsets = TRUE) {
+  out <- unlist(lapply(Filter(Negate(is.null), models), function(m)
+    .offset_split(m, exposure_col, keep_offsets)$kept))
+  unique(as.character(out))
 }
 
 # Is every offset term a logarithm? Only then is exp(offset) an exposure,
@@ -286,10 +329,21 @@
 # an Exposure column would keep its offset intact and return a prediction
 # per record instead of a rate, silently, because the column being set to 1
 # is not the one in the linear predictor.
-.model_rate <- function(model, data, exposure_col, fn) {
+#
+# With `keep_offsets = TRUE` only the exposure offset is taken out and any
+# other offset, such as a bonus-malus scale, stays in; see .offset_split().
+.model_rate <- function(model, data, exposure_col, fn, keep_offsets = TRUE) {
   if (is.null(model)) return(rep(1, nrow(data)))
   if (is.null(model$offset))
     return(as.numeric(predict(model, newdata = data, type = "response")))
+  sp <- .offset_split(model, exposure_col, keep_offsets)
+  if (length(sp$mixed))
+    warning(fn, ": the exposure offset also holds '",
+            paste(sp$mixed, collapse = ", "), "' in the same expression, so ",
+            "the two cannot be separated and both are taken out of the rate. ",
+            "Write them as separate terms, offset(log(", exposure_col,
+            ")) + offset(log(", sp$mixed[1], ")), to keep the second in.",
+            call. = FALSE)
 
   ov <- .offset_vars(model)
   lk <- family(model)$link
@@ -314,7 +368,7 @@
   # from the formula's environment and is perfectly evaluable. Let the
   # evaluation itself be the test, and fail loudly rather than hand back a
   # prediction that still has the offset in it.
-  out <- tryCatch(.predict_no_offset(model, data),
+  out <- tryCatch(.predict_no_offset(model, data, sp$drop),
                   error = function(e) e)
   if (inherits(out, "error"))
     stop(fn, ": the model has an offset that could not be evaluated on this ",
@@ -329,7 +383,7 @@
 .old_new_rates <- function(data, model_freq_new, model_sev_new,
                            model_freq_old, model_sev_old,
                            old_premium_col, old_premium_basis,
-                           exposure_col, fn) {
+                           exposure_col, fn, keep_offsets = TRUE) {
   if (is.null(model_freq_new) && is.null(model_sev_new))
     stop(fn, ": provide at least one NEW model.", call. = FALSE)
   has_old <- !is.null(model_freq_old) || !is.null(model_sev_old)
@@ -339,17 +393,27 @@
     stop(fn, ": provide either old models or 'old_premium_col', not both.",
          call. = FALSE)
 
-  new_rate <- .model_rate(model_freq_new, data, exposure_col, fn) *
-              .model_rate(model_sev_new,  data, exposure_col, fn)
+  # Both sides get the same treatment of their offsets, so a bonus-malus
+  # scale either stays in on both or comes out on both
+  new_rate <- .model_rate(model_freq_new, data, exposure_col, fn, keep_offsets) *
+              .model_rate(model_sev_new,  data, exposure_col, fn, keep_offsets)
   old_rate <- if (has_old) {
-    .model_rate(model_freq_old, data, exposure_col, fn) *
-      .model_rate(model_sev_old, data, exposure_col, fn)
+    .model_rate(model_freq_old, data, exposure_col, fn, keep_offsets) *
+      .model_rate(model_sev_old, data, exposure_col, fn, keep_offsets)
   } else if (old_premium_basis == "amount") {
     data[[old_premium_col]] / data[[exposure_col]]
   } else {
     data[[old_premium_col]]
   }
-  list(new = new_rate, old = old_rate)
+  list(new = new_rate, old = old_rate,
+       kept = .kept_offsets(list(model_freq_new, model_sev_new,
+                                 model_freq_old, model_sev_old),
+                            exposure_col, keep_offsets))
+}
+
+# One line for an output to say what its rates are on.
+.kept_label <- function(kept) {
+  if (length(kept)) paste(kept, collapse = ", ") else "none"
 }
 
 # An overall A/E far from 1 nearly always means the prediction and

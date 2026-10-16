@@ -13,13 +13,15 @@ model_lift(
   claims_col = "AantalClaims",
   weight_col = NULL,
   n_bins = 10,
-  y_range = NULL
+  y_range = NULL,
+  keep_offsets = TRUE
 )
 }
 \arguments{
 \item{model_freq, model_sev}{Fitted glm objects. Supply both for a risk
-premium, or one for a frequency- or severity-only lift. Offsets are
-neutralised, so the prediction is a rate per unit of exposure.}
+premium, or one for a frequency- or severity-only lift. The exposure
+offset is taken out, so the prediction is a rate per unit of exposure;
+any other offset stays in by default (see \code{keep_offsets}).}
 
 \item{data}{Data to evaluate on. \code{NULL} (default) uses the model's own
 rows, which is in-sample and is labelled as such on the plot; pass a
@@ -46,6 +48,16 @@ only to override that choice.}
 \item{n_bins}{Number of equal-weight bins (default 10).}
 
 \item{y_range}{Optional \code{c(lo, hi)} to fix the rate axis.}
+
+\item{keep_offsets}{\code{TRUE} (default): only the exposure offset is taken
+out, and any other offset - a bonus-malus scale carried as
+\code{offset(log(BM))} - stays in the prediction. The claims being compared
+against happened at each policy's own BM, so the prediction has to
+include it: taking it out as well put every policy at the class
+without discount, and a correct model then read about as much too
+expensive as the average discount, in every bin. \code{FALSE} takes every
+offset out. \code{stats$offsets_kept} and the axis title say which stayed
+in.}
 }
 \value{
 A list with \code{table} (one row per bin), \code{gini}, \code{stats}, \code{plot}

@@ -33,8 +33,9 @@
 #' than drawn as if the model had that resolution.
 #'
 #' @param model_freq,model_sev Fitted glm objects. Supply both for a risk
-#'   premium, or one for a frequency- or severity-only lift. Offsets are
-#'   neutralised, so the prediction is a rate per unit of exposure.
+#'   premium, or one for a frequency- or severity-only lift. The exposure
+#'   offset is taken out, so the prediction is a rate per unit of exposure;
+#'   any other offset stays in by default (see `keep_offsets`).
 #' @param data Data to evaluate on. `NULL` (default) uses the model's own
 #'   rows, which is in-sample and is labelled as such on the plot; pass a
 #'   holdout for an honest out-of-sample lift.
@@ -54,6 +55,15 @@
 #'   only to override that choice.
 #' @param n_bins Number of equal-weight bins (default 10).
 #' @param y_range Optional `c(lo, hi)` to fix the rate axis.
+#' @param keep_offsets `TRUE` (default): only the exposure offset is taken
+#'   out, and any other offset - a bonus-malus scale carried as
+#'   `offset(log(BM))` - stays in the prediction. The claims being compared
+#'   against happened at each policy's own BM, so the prediction has to
+#'   include it: taking it out as well put every policy at the class
+#'   without discount, and a correct model then read about as much too
+#'   expensive as the average discount, in every bin. `FALSE` takes every
+#'   offset out. `stats$offsets_kept` and the axis title say which stayed
+#'   in.
 #'
 #' @return A list with `table` (one row per bin), `gini`, `stats`, `plot`
 #'   (the lift chart) and `plot_lorenz` (the curve behind the Gini). The
@@ -67,10 +77,14 @@ model_lift <- function(model_freq = NULL, model_sev = NULL, data = NULL,
                        exposure_col = "Exposure",
                        claims_col = "AantalClaims",
                        weight_col = NULL,
-                       n_bins = 10, y_range = NULL) {
+                       n_bins = 10, y_range = NULL,
+                       keep_offsets = TRUE) {
 
   if (is.null(model_freq) && is.null(model_sev))
     stop("model_lift: provide at least one model.", call. = FALSE)
+  if (!is.logical(keep_offsets) || length(keep_offsets) != 1 ||
+      is.na(keep_offsets))
+    stop("model_lift: 'keep_offsets' must be TRUE or FALSE.", call. = FALSE)
 
   # The weight has to be the denominator the prediction is a rate over. A
   # severity model predicts a mean per claim, so weighting it by exposure
@@ -98,8 +112,12 @@ model_lift <- function(model_freq = NULL, model_sev = NULL, data = NULL,
   }
   .check_cols(data, c(actual_col, exposure_col, weight_col), "model_lift")
 
-  rate <- .model_rate(model_freq, data, exposure_col, "model_lift") *
-          .model_rate(model_sev,  data, exposure_col, "model_lift")
+  rate <- .model_rate(model_freq, data, exposure_col, "model_lift",
+                      keep_offsets) *
+          .model_rate(model_sev,  data, exposure_col, "model_lift",
+                      keep_offsets)
+  kept <- .kept_offsets(list(model_freq, model_sev), exposure_col,
+                        keep_offsets)
   w    <- as.numeric(data[[weight_col]])
   act  <- as.numeric(data[[actual_col]])
 
@@ -133,7 +151,9 @@ model_lift <- function(model_freq = NULL, model_sev = NULL, data = NULL,
   # Every axis names the weight actually in force, so a severity lift does
   # not claim to be per unit of exposure
   w_lab    <- if (identical(weight_col, exposure_col)) "exposure" else weight_col
-  rate_lab <- paste0("Rate per unit of ", w_lab)
+  rate_lab <- paste0("Rate per unit of ", w_lab,
+                     if (length(kept)) paste0(", incl. ",
+                                              paste(kept, collapse = ", ")))
 
   ht <- paste0("<b>Bin %{x}</b><br>%{data.name}: %{y:.2f}",
                "<extra></extra>")
@@ -199,7 +219,8 @@ model_lift <- function(model_freq = NULL, model_sev = NULL, data = NULL,
   list(table = tbl, gini = gini,
        stats = list(gini = gini, in_sample = in_sample, n_bins = n_bins,
                     n_rows = length(rate), n_dropped = n_drop,
-                    total_actual = sum(act), total_predicted = sum(rate * w)),
+                    total_actual = sum(act), total_predicted = sum(rate * w),
+                    offsets_kept = kept),
        plot = p, plot_lorenz = p_lor)
 }
 
@@ -232,6 +253,11 @@ model_lift <- function(model_freq = NULL, model_sev = NULL, data = NULL,
 #' @param rebase `TRUE` (default) scales the new rates so the
 #'   exposure-weighted totals match, isolating differentiation from level.
 #' @param y_range Optional `c(lo, hi)` to fix the A/E axis.
+#' @param keep_offsets `TRUE` (default): only the exposure offset is taken
+#'   out of both rates, and any other offset - a bonus-malus scale - stays
+#'   in, as it must for an A/E against claims that happened at each
+#'   policy's own BM. An old premium column must then include the discount
+#'   too. `FALSE` takes every offset out. See [premium_impact()].
 #'
 #' @return A list with `table` (per bin: exposure, the mean rate ratio, and
 #'   the A/E of each model), `stats`, and `plot`. `stats$rate_level_change`
@@ -246,9 +272,13 @@ double_lift <- function(data,
                         old_premium_basis = c("amount", "rate"),
                         actual_col = "SCHADELAST",
                         exposure_col = "Exposure",
-                        n_bins = 10, rebase = TRUE, y_range = NULL) {
+                        n_bins = 10, rebase = TRUE, y_range = NULL,
+                        keep_offsets = TRUE) {
 
   old_premium_basis <- match.arg(old_premium_basis)
+  if (!is.logical(keep_offsets) || length(keep_offsets) != 1 ||
+      is.na(keep_offsets))
+    stop("double_lift: 'keep_offsets' must be TRUE or FALSE.", call. = FALSE)
   y_range <- .check_range(y_range, "double_lift")
   if (n_bins < 2) stop("double_lift: 'n_bins' must be at least 2.",
                        call. = FALSE)
@@ -258,7 +288,8 @@ double_lift <- function(data,
 
   r <- .old_new_rates(data, model_freq_new, model_sev_new,
                       model_freq_old, model_sev_old, old_premium_col,
-                      old_premium_basis, exposure_col, "double_lift")
+                      old_premium_basis, exposure_col, "double_lift",
+                      keep_offsets)
   w   <- as.numeric(data[[exposure_col]])
   act <- as.numeric(data[[actual_col]])
 
@@ -348,6 +379,6 @@ double_lift <- function(data,
        stats = list(mad_new = mad_new, mad_old = mad_old, winner = winner,
                     rebase = rebase, rate_level_change = rate_level_change,
                     n_bins = n_bins, n_rows = length(new),
-                    n_dropped = n_drop),
+                    n_dropped = n_drop, offsets_kept = r$kept),
        plot = p)
 }

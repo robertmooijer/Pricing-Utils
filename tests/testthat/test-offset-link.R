@@ -168,7 +168,11 @@ test_that("offsets from the formula and the argument add up", {
   eta_pred <- as.numeric(predict(m, newdata = dd, type = "link"))
   # what predict adds is exactly what we take out
   expect_equal(.offset_value(m, dd), eta_pred - eta_bare, tolerance = 1e-10)
-  expect_equal(.model_rate(m, dd, "Exposure", "t"), exp(eta_bare),
+  # taking everything out removes both, from both places
+  expect_equal(.model_rate(m, dd, "Exposure", "t", keep_offsets = FALSE),
+               exp(eta_bare), tolerance = 1e-10)
+  # by default only the exposure goes, and the second offset stays in
+  expect_equal(.model_rate(m, dd, "Exposure", "t"), exp(eta_bare + dd$const),
                tolerance = 1e-10)
   expect_setequal(.offset_vars(m), c("Exposure", "const"))
 })
@@ -280,4 +284,137 @@ test_that("the exposure column falls back and can be named", {
   expect_equal(as.vector(tr(suppressWarnings(
                  plot_glm_predictor(mb, "R", exposure_col = "Ex")))$y),
                as.vector(tapply(db$Ex, db$R, sum)), tolerance = 1e-12)
+})
+
+test_that("a bonus-malus offset stays in the rate, the exposure goes", {
+  set.seed(81)
+  nk <- 20000
+  dk <- data.frame(R = factor(sample(c("N", "Z"), nk, TRUE)),
+                   BM_KLASSE = sample(1:5, nk, TRUE),
+                   Exposure = round(runif(nk, .1, 1), 3))
+  dk$BM <- c(1, .9, .8, .7, .6)[dk$BM_KLASSE]
+  dk$AantalClaims <- rpois(nk, dk$Exposure * dk$BM *
+                             exp(-2 + .3 * (dk$R == "Z")))
+  mk <- glm(AantalClaims ~ R + offset(log(Exposure)) + offset(log(BM)),
+            poisson(), dk)
+
+  base_rate <- as.vector(exp(coef(mk)[1] + coef(mk)[2] * (dk$R == "Z")))
+  # default: a year at the policy's own BM
+  expect_equal(.model_rate(mk, dk, "Exposure", "t"), base_rate * dk$BM,
+               tolerance = 1e-10)
+  d1 <- dk; d1$Exposure <- 1
+  expect_equal(.model_rate(mk, dk, "Exposure", "t"),
+               as.numeric(predict(mk, d1, type = "response")),
+               tolerance = 1e-10)
+  # everything out: the class without discount
+  expect_equal(.model_rate(mk, dk, "Exposure", "t", keep_offsets = FALSE),
+               base_rate, tolerance = 1e-10)
+  expect_identical(.kept_offsets(list(mk), "Exposure"), "BM")
+  expect_identical(.kept_offsets(list(mk), "Exposure", FALSE), character(0))
+
+  # one expression holding both cannot be split, and says so
+  mm <- glm(AantalClaims ~ R + offset(log(Exposure * BM)), poisson(), dk)
+  expect_warning(r <- .model_rate(mm, dk, "Exposure", "t"),
+                 "cannot be separated")
+  expect_equal(r, as.vector(exp(coef(mm)[1] + coef(mm)[2] * (dk$R == "Z"))),
+               tolerance = 1e-10)
+})
+
+test_that("model_lift reads a BM model against its own claims", {
+  set.seed(82)
+  nk <- 30000
+  dk <- data.frame(R = factor(sample(c("N", "Z", "O"), nk, TRUE)),
+                   L = round(runif(nk, 18, 80)),
+                   BM_KLASSE = sample(1:5, nk, TRUE),
+                   Exposure = round(runif(nk, .1, 1), 3))
+  dk$BM <- c(1, .9, .8, .7, .6)[dk$BM_KLASSE]
+  dk$AantalClaims <- rpois(nk, dk$Exposure * dk$BM *
+                             exp(-2 + .3 * (dk$R == "Z") + .01 * (dk$L - 40)))
+  mk <- glm(AantalClaims ~ R + L + offset(log(Exposure)) + offset(log(BM)),
+            poisson(), dk)
+
+  # in-sample a Poisson GLM reproduces the claim total exactly, so the lift
+  # has to as well; with the BM taken out it read the average discount
+  lf <- model_lift(mk, NULL, data = dk, actual_col = "AantalClaims")
+  expect_equal(lf$stats$total_actual / lf$stats$total_predicted, 1,
+               tolerance = 1e-8)
+  expect_identical(lf$stats$offsets_kept, "BM")
+  lf0 <- suppressWarnings(model_lift(mk, NULL, data = dk,
+                                     actual_col = "AantalClaims",
+                                     keep_offsets = FALSE))
+  expect_equal(lf0$stats$total_actual / lf0$stats$total_predicted,
+               sum(dk$AantalClaims) /
+                 sum(fitted(mk) / dk$BM), tolerance = 1e-8)
+  expect_lt(lf0$stats$total_actual / lf0$stats$total_predicted, 0.9)
+  # the axis says what the rate is on
+  yt <- plotly::plotly_build(lf$plot)$x$layout$yaxis$title
+  expect_match(if (is.list(yt)) yt$text else yt, "incl. BM")
+
+  expect_error(model_lift(mk, NULL, data = dk, actual_col = "AantalClaims",
+                          keep_offsets = NA), "TRUE or FALSE")
+})
+
+test_that("premium_impact compares a premium incl. discount like for like", {
+  set.seed(83)
+  nk <- 20000
+  dk <- data.frame(R = factor(sample(c("N", "Z"), nk, TRUE)),
+                   BM_KLASSE = sample(1:5, nk, TRUE),
+                   Exposure = round(runif(nk, .1, 1), 3))
+  dk$BM <- c(1, .9, .8, .7, .6)[dk$BM_KLASSE]
+  dk$AantalClaims <- rpois(nk, dk$Exposure * dk$BM *
+                             exp(-2 + .3 * (dk$R == "Z")))
+  dk$SCHADELAST <- ifelse(dk$AantalClaims > 0,
+                          dk$AantalClaims * rgamma(nk, 3, scale = 700), 0)
+  mf <- glm(AantalClaims ~ R + offset(log(Exposure)) + offset(log(BM)),
+            poisson(), dk)
+  ds <- dk[dk$AantalClaims > 0, ]
+  ds$AvgLoss <- ds$SCHADELAST / ds$AantalClaims
+  ms <- glm(AvgLoss ~ R, Gamma("log"), ds, weights = AantalClaims)
+
+  # an "old" annual premium identical to the new tariff, discount included:
+  # the true change is zero for every policy
+  d1 <- dk; d1$Exposure <- 1
+  dk$OudePremie <- as.numeric(predict(mf, d1, type = "response") *
+                              predict(ms, d1, type = "response"))
+
+  pi <- premium_impact(dk, model_freq_new = mf, model_sev_new = ms,
+                       old_premium_col = "OudePremie",
+                       old_premium_basis = "rate")
+  expect_lt(max(abs(pi$policy$ChangePct)), 1e-8)
+  expect_identical(pi$stats$offsets_kept, "BM")
+  expect_identical(pi$summary$Value[pi$summary$Metric ==
+                                      "Offsets kept in the rate"], "BM")
+
+  # the old behaviour, taking the discount out of the new side only, made
+  # an unchanged tariff look like a shift onto the discounted classes
+  pi0 <- premium_impact(dk, model_freq_new = mf, model_sev_new = ms,
+                        old_premium_col = "OudePremie",
+                        old_premium_basis = "rate", keep_offsets = FALSE)
+  m0 <- tapply(pi0$policy$ChangePct, dk$BM_KLASSE, mean)
+  expect_gt(m0[["5"]] - m0[["1"]], 50)
+  # and with keep_offsets = FALSE a premium before discount is the match
+  dk$OudePremie_exBM <- dk$OudePremie / dk$BM
+  pi1 <- premium_impact(dk, model_freq_new = mf, model_sev_new = ms,
+                        old_premium_col = "OudePremie_exBM",
+                        old_premium_basis = "rate", keep_offsets = FALSE)
+  expect_lt(max(abs(pi1$policy$ChangePct)), 1e-8)
+  expect_identical(pi1$stats$offsets_kept, character(0))
+
+  # old models against new models: the changes do not depend on the choice
+  pa <- premium_impact(dk, model_freq_new = mf, model_sev_new = ms,
+                       model_freq_old = mf, model_sev_old = ms)
+  pb <- premium_impact(dk, model_freq_new = mf, model_sev_new = ms,
+                       model_freq_old = mf, model_sev_old = ms,
+                       keep_offsets = FALSE)
+  expect_equal(pa$policy$ChangePct, pb$policy$ChangePct, tolerance = 1e-10)
+
+  # double_lift follows the same rule
+  # every policy has the same new/old ratio here, which double_lift rightly
+  # warns about; the point is the level and what is reported
+  dl <- suppressWarnings(double_lift(dk, model_freq_new = mf,
+                                     model_sev_new = ms,
+                                     old_premium_col = "OudePremie",
+                                     old_premium_basis = "rate", n_bins = 2))
+  expect_identical(dl$stats$offsets_kept, "BM")
+  expect_equal(dl$stats$rate_level_change, 0, tolerance = 1e-10)
 })
