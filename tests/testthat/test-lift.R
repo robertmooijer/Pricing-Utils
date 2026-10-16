@@ -148,7 +148,7 @@ test_that("mismatched units are caught", {
                  "not the same quantity")
   expect_warning(double_lift(dl, model_freq_new = m_good,
                              model_freq_old = m_null,
-                             actual_col = "SCHADELAST"),
+                             actual_col = "SCHADELAST", n_boot = 0),
                  "not the same quantity")
   # matching units stay silent
   expect_silent(model_lift(m_good, data = dl, actual_col = "AantalClaims"))

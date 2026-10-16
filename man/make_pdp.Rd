@@ -17,7 +17,8 @@ make_pdp(
   claims_col = "AantalClaims",
   loss_col = "SCHADELAST",
   discrete_cutoff = 25,
-  y_range = NULL
+  y_range = NULL,
+  keep_offsets = TRUE
 )
 }
 \arguments{
@@ -45,6 +46,12 @@ make_pdp(
 \item{y_range}{Optional \code{c(lo, hi)} to fix the primary y-axis range, so
 PDPs for different predictors become directly comparable. \code{NULL}
 (default) auto-scales to this plot's own values.}
+
+\item{keep_offsets}{\code{TRUE} (default): only the exposure offset is taken
+out, and any other offset stays in at each policy's own value, as it
+does in \code{\link[=premium_impact]{premium_impact()}} and \code{\link[=model_lift]{model_lift()}}. \code{FALSE} takes every
+offset out, which puts the PDP at BM = 1 and no longer on the level of
+the observed line. The default y-axis title names the offsets kept.}
 }
 \value{
 A plotly object with exposure/claim bars, the observed one-way
@@ -54,15 +61,20 @@ line and the PDP line.
 Computes the PDP on the response scale: for each grid value of \code{pred_var}
 the whole training data is set to that value, predicted with
 \code{predict(type = "response")}, and the weighted arithmetic mean is taken
-(frequency: exposure-weighted; severity: claim-weighted). The whole
+(frequency: exposure-weighted; severity: claim-weighted). The exposure
 offset is subtracted on the link scale, so the PDP is a frequency per
-unit of exposure and directly comparable to the observed line. That
-includes a second offset such as a bonus-malus scale: the PDP is at
-BM = 1, the class without discount, like the rating table.
+unit of exposure and directly comparable to the observed line.
 (\code{exp(mean(link))} would be a geometric mean, including the offset, and
 systematically biased low.)
 }
 \details{
+Any other offset, a bonus-malus scale carried as \code{offset(log(BM))},
+stays in at each policy's own value by default, because the observed
+line is at each policy's own BM as well. Taking it out put the PDP at
+the class without discount: on a book with an average BM of 0.74 it ran
+35\% above the observed line at every level of a variable the model had
+exactly right. The rating table is the place for factors at BM = 1.
+
 The "Observed" line is a one-way marginal (including correlations with
 other rating factors); the PDP is a partial effect. Differences between
 the two therefore do not necessarily indicate misfit.

@@ -18,7 +18,10 @@ screen_features(
   max_rows = Inf,
   tree_method = "hist",
   nthread = NULL,
-  seed = NULL
+  seed = NULL,
+  exposure_col = "Exposure",
+  claims_col = "AantalClaims",
+  loss_col = "SCHADELAST"
 )
 }
 \arguments{
@@ -27,7 +30,12 @@ small as \code{y ~ 1 + offset(log(Exposure))}. Poisson/quasipoisson count
 models and Gamma log-link models are supported.}
 
 \item{features}{Candidate columns. \code{NULL} (default) uses every usable
-column of the model's data except the response and the offset.}
+column of the model's data except the response, the offset, the prior
+weights and the outcome columns \code{claims_col}, \code{loss_col} and
+\code{exposure_col}. Offered the loss amount, a booster on a frequency
+model finds that claims follow losses and ranks it first, which is
+leakage rather than risk. Naming an outcome column here keeps it, with
+a warning.}
 
 \item{split}{Row shares for train / validation (early stopping) /
 test (reporting). Must sum to 1.}
@@ -78,6 +86,10 @@ machine the measured gain over a single-threaded run is more than a
 factor of two.}
 
 \item{seed}{Optional seed for the sample, the split and the boosting.}
+
+\item{exposure_col, claims_col, loss_col}{The outcome and volume columns
+kept out of the default candidates (defaults \code{"Exposure"},
+\code{"AantalClaims"}, \code{"SCHADELAST"}), see \code{\link[=agg_all]{agg_all()}}.}
 }
 \value{
 A list with \code{summary} (the staged deviance comparison),

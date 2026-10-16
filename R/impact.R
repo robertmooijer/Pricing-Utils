@@ -44,10 +44,14 @@
 #'   stayed in.
 #' @param rebase `TRUE` = scale new premiums to the old total (default).
 #' @param by Optional character vector of columns for a per-level impact
-#'   breakdown. Besides the exposure-weighted mean change per level, this
-#'   gives `Contribution = ExposureShare x MeanChangePct`, which sums over
-#'   the levels of one variable to the portfolio change and so answers
-#'   which segment is driving it.
+#'   breakdown. Per level it gives the exposure-weighted mean change of the
+#'   policies (`MeanChangePct`, what a customer in that level sees on
+#'   average), the change of the level's total premium (`TotalChangePct`),
+#'   its share of the old premium (`PremiumShare`) and
+#'   `Contribution = PremiumShare x TotalChangePct`: the level's part of
+#'   the change in the total premium. The contributions of one variable sum
+#'   to that change exactly - to 0 after a rebase - and so answer which
+#'   segment drives it.
 #' @param spotlight Optional subset to report separately: either a logical
 #'   vector with one value per row of `data`, or an expression evaluated
 #'   against `data`, e.g. `REGIO == "Stad" & LEEFTIJD < 25`. It is a
@@ -58,6 +62,18 @@
 #'   portfolio.
 #' @param n_show Number of rows in the winners/losers tables (default 10).
 #' @param exposure_col Exposure column (default `"Exposure"`).
+#' @param at Optional named list of values to price every policy at, e.g.
+#'   `list(BOEKJAAR = 2024)`. Applied to the data the models score, not to
+#'   an old premium column. With the accounting year as a rating factor
+#'   each policy is otherwise priced at the level of its own historic year,
+#'   which against a current premium mixes inflation into the dislocation:
+#'   measured, a rate-level change of +11.1% on the historic years against
+#'   +34.7% at the tariff year.
+#' @param year_col Accounting-year column (default `"BOEKJAAR"`). When the
+#'   new models use it against an old premium column, or only one of the
+#'   two model sets uses it, and `at` does not set it, a warning says so.
+#'   Two model sets that both use it price every policy at the same year on
+#'   both sides, which is like for like. `NULL` switches the warning off.
 #' @param x_range,y_range Optional `c(lo, hi)` to fix the axes of the
 #'   returned histogram, so impact plots for different scenarios become
 #'   directly comparable. `x_range` bounds the premium change (%) - the
@@ -69,9 +85,10 @@
 #' @return A list with `summary` (display table with the headline numbers),
 #'   `stats` (the same numbers as a named list), `policy` (per-row
 #'   `OldRate`, `NewRate`, `NewRateRebased`, `ChangePct`), `by_level`
-#'   (per level: exposure, share, mean change and contribution, when `by`
-#'   is given), `spotlight` (the same headline numbers for the subset, when
-#'   `spotlight` is given), `largest_increases` / `largest_decreases`
+#'   (per level: exposure and its share, old premium and its share, mean
+#'   and total change, and contribution, when `by` is given), `spotlight`
+#'   (the same headline numbers for the subset, when `spotlight` is
+#'   given), `largest_increases` / `largest_decreases`
 #'   (top-`n_show` dislocations) and `plot` (exposure-weighted histogram of
 #'   the premium changes, with the spotlight overlaid).
 #'
@@ -95,7 +112,9 @@ premium_impact <- function(data,
                            spotlight    = NULL,
                            x_range      = NULL,
                            y_range      = NULL,
-                           keep_offsets = TRUE) {
+                           keep_offsets = TRUE,
+                           at           = NULL,
+                           year_col     = "BOEKJAAR") {
 
   old_premium_basis <- match.arg(old_premium_basis)
   if (!is.logical(keep_offsets) || length(keep_offsets) != 1 ||
@@ -126,11 +145,16 @@ premium_impact <- function(data,
     s & !is.na(s)
   }
 
+  # [RATE-10]
+  has_old_models <- !is.null(model_freq_old) || !is.null(model_sev_old)
+  .year_warning(list(model_freq_new, model_sev_new),
+                if (has_old_models) list(model_freq_old, model_sev_old),
+                year_col, at, "premium_impact")
   # [OFF-05]
   r <- .old_new_rates(data, model_freq_new, model_sev_new,
                       model_freq_old, model_sev_old, old_premium_col,
                       old_premium_basis, exposure_col, "premium_impact",
-                      keep_offsets)
+                      keep_offsets, at = at)
   new_rate <- r$new
   old_rate <- r$old
 
@@ -138,9 +162,14 @@ premium_impact <- function(data,
   keep <- is.finite(new_rate) & is.finite(old_rate) & old_rate > 0 &
           is.finite(expo) & expo > 0
   n_drop <- sum(!keep)
+  # [RATE-05]
   if (n_drop > 0)
-    warning("premium_impact: ", n_drop, " row(s) dropped (NA or ",
-            "non-positive premium/exposure).", call. = FALSE)
+    warning("premium_impact: ", n_drop, " row(s) dropped (",
+            .drop_reasons(list(
+              "no usable new premium" = !is.finite(new_rate),
+              "no usable old premium" = !(is.finite(old_rate) & old_rate > 0),
+              "no positive exposure"  = !(is.finite(expo) & expo > 0))),
+            ").", call. = FALSE)
   if (!any(keep)) stop("premium_impact: no usable rows left.")
 
   idx      <- which(keep)
@@ -176,18 +205,30 @@ premium_impact <- function(data,
   # [RATE-04]
   # Contribution decomposition. The portfolio is the same on both sides, so
   # there is no mix effect to isolate; what can be decomposed is who causes
-  # the overall change. Contribution = share x change, and the levels of one
-  # variable sum to the portfolio change.
+  # the overall change. A level's contribution is its part of the change in
+  # the total premium, (new - old) / old total, so the levels of one
+  # variable sum to that change exactly, and to 0 after a rebase.
+  #
+  # It used to be ExposureShare x the exposure-weighted mean change, which
+  # sums to the mean change of a policy rather than of the premium: -4.0%
+  # on a rebased book whose total had not moved, because a percentage on a
+  # cheap policy weighs as much as one on an expensive policy. The mean
+  # change per level is still reported, as what a customer in it sees.
   by_level <- NULL
   if (!is.null(by)) {
     tot_w <- sum(expo)
     by_level <- do.call(rbind, lapply(by, function(v) {
       dtb <- data.table::data.table(Level = as.character(data[[v]][idx]),
-                                    w = expo, ch = change)
+                                    w = expo, ch = change,
+                                    po = old_rate * expo, pn = new_adj * expo)
       ag  <- dtb[, .(Exposure      = sum(w),
-                     MeanChangePct = sum(ch * w) / sum(w)), by = Level]
-      ag[, ExposureShare := Exposure / tot_w]
-      ag[, Contribution  := ExposureShare * MeanChangePct]
+                     MeanChangePct = sum(ch * w) / sum(w),
+                     OldPremium    = sum(po),
+                     NewPremium    = sum(pn)), by = Level]
+      ag[, ExposureShare  := Exposure / tot_w]
+      ag[, PremiumShare   := OldPremium / old_total]
+      ag[, TotalChangePct := 100 * (NewPremium / OldPremium - 1)]
+      ag[, Contribution   := 100 * (NewPremium - OldPremium) / old_total]
       data.frame(Variable = v, as.data.frame(ag), stringsAsFactors = FALSE)
     }))
     by_level <- by_level[order(by_level$Variable,
@@ -218,8 +259,8 @@ premium_impact <- function(data,
         p5_change       = sq[1],
         p95_change      = sq[3],
         share_gt_10     = sum(expo[sm][abs(change[sm]) > 10]) / sum(expo[sm]),
-        contribution    = sum(expo[sm]) / sum(expo) *
-                          (sum(change[sm] * expo[sm]) / sum(expo[sm])))
+        contribution    = 100 * (sum(new_adj[sm] * expo[sm]) -
+                                 sum(old_rate[sm] * expo[sm])) / old_total)
       spotlight_res$summary <- data.frame(
         Metric = c("Rows in spotlight", "Exposure share of the book",
                    "Mean change (exposure-weighted)", "Median change",

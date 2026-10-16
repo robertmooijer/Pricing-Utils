@@ -35,6 +35,9 @@
 #'   [agg_all()].
 #' @param grid_res,base_level,trim Passed to [make_pdp()] /
 #'   [make_rating_table()].
+#' @param merge_vars,base,grid_step Passed to [make_rating_table()], so the
+#'   report shows the same tariff as a table built with them. `year_col`
+#'   and `loss_col` are passed on too.
 #'
 #' @return Invisibly, the normalised path of the written file.
 #' @export
@@ -52,7 +55,10 @@ pricing_report <- function(model_freq = NULL, model_sev = NULL, data,
                            year_col     = "BOEKJAAR",
                            grid_res     = 50,
                            base_level   = c("first", "exposure"),
-                           trim         = c(0, 1)) {
+                           trim         = c(0, 1),
+                           merge_vars   = NULL,
+                           base         = NULL,
+                           grid_step    = NULL) {
 
   if (!requireNamespace("htmltools", quietly = TRUE))
     stop("pricing_report: package 'htmltools' is required.", call. = FALSE)
@@ -77,21 +83,34 @@ pricing_report <- function(model_freq = NULL, model_sev = NULL, data,
 
   h      <- htmltools::tags
   anchor <- function(v) gsub("[^A-Za-z0-9_-]", "_", v)
-  # [CONV-04] [REP-02]
-  safe   <- function(expr) tryCatch(expr, error = function(e)
+  # [CONV-04] [REP-02] [REP-03]
+  # A plot is built here, not when the page is written: plotly only builds
+  # a widget when the HTML is rendered, so an error in one plot (a heatmap
+  # with every cell thin, on a small book) escaped this guard and took the
+  # whole report down at save_html().
+  safe   <- function(expr) tryCatch({
+    w <- expr
+    if (inherits(w, "plotly")) plotly::plotly_build(w) else w
+  }, error = function(e)
     h$p(class = "ta-error", paste("Could not render:", conditionMessage(e))))
 
+  # [REP-03] formatC(format = "d") goes through an integer, so anything
+  # beyond 2^31 printed as "NA": a large GVIF did
   fmt_num <- function(x, digits = 4) {
     ifelse(is.na(x), "",
-           ifelse(abs(x) >= 1000,
-                  formatC(x, format = "d", big.mark = ","),
-                  formatC(x, format = "fg", digits = digits)))
+           ifelse(abs(x) >= 1e9,
+                  formatC(x, format = "g", digits = 3),
+                  ifelse(abs(x) >= 1000,
+                         formatC(round(x), format = "f", digits = 0,
+                                 big.mark = ","),
+                         formatC(x, format = "fg", digits = digits))))
   }
   html_table <- function(df, digits = 4) {
     rows <- lapply(seq_len(nrow(df)), function(i) {
       h$tr(lapply(seq_along(df), function(j) {
         x <- df[i, j]
-        h$td(if (is.numeric(x)) fmt_num(x, digits) else as.character(x))
+        h$td(if (is.numeric(x)) fmt_num(x, digits)
+             else if (is.na(x)) "" else as.character(x))
       }))
     })
     h$table(class = "ta-table",
@@ -106,8 +125,8 @@ pricing_report <- function(model_freq = NULL, model_sev = NULL, data,
   in_model_data <- function(model, v) {
     !is.null(model) &&
       (v %in% names(stats::model.frame(model)) ||
-         (!is.null(model$data) && is.data.frame(model$data) &&
-            v %in% names(model$data)))
+         (!is.null(.model_data(model)) &&
+            v %in% names(.model_data(model))))
   }
 
   css <- h$style(htmltools::HTML("
@@ -133,7 +152,9 @@ pricing_report <- function(model_freq = NULL, model_sev = NULL, data,
       make_rating_table(model_freq, model_sev, data = data,
                         grid_res = grid_res, exposure_col = exposure_col,
                         claims_col = claims_col, base_level = base_level,
-                        trim = trim),
+                        trim = trim, grid_step = grid_step, base = base,
+                        merge_vars = merge_vars, year_col = year_col,
+                        loss_col = loss_col),
       error = function(e) {
         warning("pricing_report: rating table failed: ",
                 conditionMessage(e), call. = FALSE)
@@ -152,7 +173,9 @@ pricing_report <- function(model_freq = NULL, model_sev = NULL, data,
         h$p(class = "ta-meta",
             "Generalised VIF per term. Read GVIF_scaled like a VIF on the ",
             "square-root scale: 3 corresponds to a VIF of about 9. A high ",
-            "value means that term's factors cannot be read on their own."),
+            "value means that term's factors cannot be read on their own. ",
+            "Terms in an interaction are not flagged: their GVIF depends ",
+            "on how the variables are coded."),
         html_table(cl)) else NULL
     }, error = function(e) NULL)
 

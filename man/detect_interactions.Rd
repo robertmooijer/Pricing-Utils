@@ -35,9 +35,9 @@ factor shows up.}
 }
 \value{
 A data.frame, strongest first, with one row per pair: \code{VarX},
-\code{VarY}, \code{Cells}, \code{Claims}, \code{Deviance}, \code{DF}, \code{Z}, \code{P}, \code{Method},
-\code{MaxAE} (A/E of the worst non-thin cell), \code{MaxAE_Claims} and
-\code{MaxAE_ExposureShare}.
+\code{VarY}, \code{Cells}, \code{Claims}, \code{Deviance} (before the dispersion scaling),
+\code{DF}, \code{Z}, \code{P}, \code{Method}, \code{Dispersion}, \code{MaxAE} (A/E of the worst
+non-thin cell), \code{MaxAE_Claims} and \code{MaxAE_ExposureShare}.
 }
 \description{
 Scans every two-way combination of \code{vars} and ranks them by how much
@@ -57,6 +57,19 @@ claims are resampled from the raked expected values under the additive
 null and the statistic is recomputed, \code{n_sim} times. For other models
 the dispersion-scaled chi-square is used instead (reported in the
 \code{Method} column).
+
+Claim counts are nearly always \strong{overdispersed}, and a Poisson null
+reads that extra variance as interaction: on ten books with a dispersion
+of 1.9 and no interaction at all, 33 of 60 pairs came out at \code{P} < 0.05
+where 3 would be expected. The deviance is therefore divided by the
+dispersion of a cell total, \code{phi = sum((y - mu)^2) / sum(mu)} over the
+rows, and the simulation draws from a Poisson with the expected values
+divided by \code{phi}, which is the quasi-Poisson scaling of a cell total.
+That is not the row-level Pearson dispersion of \code{\link[=glm_diagnostics]{glm_diagnostics()}}: a
+cell total adds rows by their mean, and under a gamma frailty the rows
+with a larger mean carry more of the extra variance (measured 1.91
+against 1.72). A dispersion below 1 is left at 1. The value used is in
+the \code{Dispersion} column.
 
 The ranking is by statistical signal (\code{Z}), which is not the same thing
 as materiality: an effect can be highly significant and commercially

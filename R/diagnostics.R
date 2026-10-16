@@ -21,6 +21,9 @@ glm_diagnostics <- function(model_freq = NULL, model_sev = NULL) {
     if (!inherits(model, "glm"))
       stop("glm_diagnostics: '", model_name, "' must be a glm object.",
            call. = FALSE)
+    # [DATA-06] na.exclude pads the residuals with NA, and the dispersion
+    # then came out NA
+    model <- .as_na_omit(model)
     fam  <- family(model)
     # [DIAG-01]
     disp <- sum(residuals(model, type = "pearson")^2) / model$df.residual
@@ -70,13 +73,22 @@ glm_diagnostics <- function(model_freq = NULL, model_sev = NULL) {
 #' [screen_features()]: that one catches correlated *candidates* before
 #' they go in, this one catches them once they are both in the model.
 #'
+#' A term that is part of an **interaction**, either the interaction itself
+#' or a main effect it contains, is reported but not flagged. Its GVIF
+#' depends on how the variables are coded rather than on the data: in a
+#' model with the interaction `pmin(LEEFTIJD, 30):STEDELIJKHEID`, writing
+#' the age part as `pmin(LEEFTIJD, 30) - 30` moved the scaled GVIF of
+#' `STEDELIJKHEID` from 14.12 to 1.11, with the fitted values identical to
+#' 2e-14. `Flag` is `NA` for those terms and `InInteraction` says which
+#' they are.
+#'
 #' @param model A fitted glm object with at least two terms.
 #' @param threshold Flag terms whose `GVIF_scaled` reaches this value
 #'   (default 3).
 #'
-#' @return A data.frame with `Term`, `DF`, `GVIF`, `GVIF_scaled` and
-#'   `Flag`, ordered by `GVIF_scaled`. Returns zero rows with a message
-#'   when the model has fewer than two terms.
+#' @return A data.frame with `Term`, `DF`, `GVIF`, `GVIF_scaled`,
+#'   `InInteraction` and `Flag`, ordered by `GVIF_scaled`. Returns zero rows
+#'   with a message when the model has fewer than two terms.
 #' @seealso [glm_diagnostics()]
 #' @export
 glm_collinearity <- function(model, threshold = 3) {
@@ -84,17 +96,30 @@ glm_collinearity <- function(model, threshold = 3) {
   if (!inherits(model, "glm"))
     stop("glm_collinearity: 'model' must be a glm object.", call. = FALSE)
 
-  labs <- attr(terms(model), "term.labels")
-  if (length(labs) < 2) {
-    message("glm_collinearity: fewer than two terms, nothing to compare.")
-    return(data.frame(Term = character(0), DF = integer(0),
-                      GVIF = numeric(0), GVIF_scaled = numeric(0),
-                      Flag = logical(0), stringsAsFactors = FALSE))
-  }
-
   empty <- data.frame(Term = character(0), DF = integer(0),
                       GVIF = numeric(0), GVIF_scaled = numeric(0),
-                      Flag = logical(0), stringsAsFactors = FALSE)
+                      InInteraction = logical(0), Flag = logical(0),
+                      stringsAsFactors = FALSE)
+  tt   <- terms(model)
+  labs <- attr(tt, "term.labels")
+  if (length(labs) < 2) {
+    message("glm_collinearity: fewer than two terms, nothing to compare.")
+    return(empty)
+  }
+
+  # [DIAG-07]
+  # Terms in an interaction: the interaction itself and every term whose
+  # variables it contains. Their GVIF changes with the coding (centring a
+  # variable, another contrast) while the fit stays the same.
+  ord <- attr(tt, "order")
+  fac <- attr(tt, "factors")
+  in_int <- vapply(seq_along(labs), function(i) {
+    if (ord[i] > 1) return(TRUE)
+    hi <- which(ord > 1)
+    if (!length(hi) || is.null(fac)) return(FALSE)
+    vars <- rownames(fac)[fac[, i] > 0]
+    any(fac[vars, hi, drop = FALSE] > 0)
+  }, logical(1))
 
   v   <- stats::vcov(model)
   mm  <- stats::model.matrix(model)
@@ -161,19 +186,28 @@ glm_collinearity <- function(model, threshold = 3) {
     dfi  <- sum(sel)
     data.frame(Term = labs[i], DF = dfi, GVIF = gvif,
                GVIF_scaled = gvif^(1 / (2 * dfi)),
+               InInteraction = in_int[i],
                stringsAsFactors = FALSE)
   }))
   out <- out[is.finite(out$GVIF_scaled), , drop = FALSE]
   if (!nrow(out)) return(empty)
-  out$Flag <- out$GVIF_scaled >= threshold
+  out$Flag <- ifelse(out$InInteraction, NA, out$GVIF_scaled >= threshold)
   out <- out[order(-out$GVIF_scaled), ]
   rownames(out) <- NULL
 
-  if (any(out$Flag))
-    warning("glm_collinearity: ", sum(out$Flag), " term(s) at or above a ",
-            "scaled GVIF of ", threshold, " (", paste(out$Term[out$Flag],
+  flagged <- which(out$Flag)
+  if (length(flagged))
+    warning("glm_collinearity: ", length(flagged), " term(s) at or above a ",
+            "scaled GVIF of ", threshold, " (", paste(out$Term[flagged],
             collapse = ", "), "); their factors are unstable and should ",
             "not be read individually.", call. = FALSE)
+  if (any(out$InInteraction))
+    warning("glm_collinearity: ", paste(out$Term[out$InInteraction],
+                                        collapse = ", "),
+            " belong to an interaction, so their GVIF depends on how the ",
+            "variables are coded (centring one changes it, the fit stays ",
+            "the same). They are not flagged; judge them on the stability ",
+            "of the combined effect instead.", call. = FALSE)
   out
 }
 
@@ -191,6 +225,17 @@ glm_collinearity <- function(model, threshold = 3) {
 #' are independent draws, and a connecting line invites the eye to read a
 #' trend into what is mostly noise; the band is what says whether a point
 #' means anything.
+#'
+#' A Pearson residual has mean 0 and variance `phi` under the model, so its
+#' band is `2 sqrt(phi / n)`. A **deviance** residual is not centred: for a
+#' Poisson count with a small mean it is negative on average, since a
+#' claim-free row has `-sqrt(2 mu)`. On a correct Poisson book every bin
+#' then sat below the band. Deviance residuals are therefore shown minus
+#' their expectation under the fitted model, row by row, and the band per
+#' bin is `2 sqrt(sum of the row variances) / n`. Both moments are exact
+#' for the Poisson, negative binomial, binomial, Gamma and Gaussian
+#' families; for any other family the residuals are shown as they are,
+#' with a warning.
 #'
 #' @param model A fitted glm object.
 #' @param predictor Optional: bin by this predictor instead of the fitted
@@ -211,9 +256,32 @@ plot_glm_residuals <- function(model, predictor = NULL, n_bins = 50,
   y_range <- .check_range(y_range, "plot_glm_residuals")
   if (!inherits(model, "glm")) stop("'model' must be a glm object.")
   if (n_bins < 2) stop("plot_glm_residuals: 'n_bins' must be at least 2.")
+  # [DATA-06]
+  model <- .as_na_omit(model)
 
   r    <- as.numeric(residuals(model, type = residual_type))
   disp <- sum(residuals(model, type = "pearson")^2) / model$df.residual
+
+  # [DIAG-06]
+  # Each row's residual variance, so the band can follow the bin; for
+  # deviance residuals also their mean, which is taken off
+  rv <- rep(disp, length(r))
+  centred <- FALSE
+  if (residual_type == "deviance") {
+    mom <- .dev_resid_moments(model)
+    if (is.null(mom) || anyNA(mom$mean) || anyNA(mom$var)) {
+      warning("plot_glm_residuals: the mean of a deviance residual has no ",
+              "closed form here for the '", family(model)$family, "' ",
+              "family, so the residuals are not centred and the band ",
+              "assumes a variance of phi. A deviance residual is not ",
+              "centred, so the bins can sit off zero for a correct model; ",
+              "residual_type = \"pearson\" has no such bias.", call. = FALSE)
+    } else {
+      r  <- r - mom$mean
+      rv <- mom$var
+      centred <- TRUE
+    }
+  }
 
   if (is.null(predictor)) {
     x    <- as.numeric(fitted(model))
@@ -230,7 +298,7 @@ plot_glm_residuals <- function(model, predictor = NULL, n_bins = 50,
     xlab <- predictor
   }
 
-  df <- data.frame(x = x, r = r)
+  df <- data.frame(x = x, r = r, rv = rv)
   x_numeric <- is.numeric(df$x)
   if (x_numeric && length(unique(df$x)) > n_bins) {
     brks <- unique(stats::quantile(df$x,
@@ -248,10 +316,11 @@ plot_glm_residuals <- function(model, predictor = NULL, n_bins = 50,
       x_plot = if (x_numeric) mean(x) else dplyr::first(as.character(x)),
       mean_r = mean(r),
       n      = n(),
+      # [DIAG-03] [DIAG-06] 2 SE of a bin mean: 2 sqrt(sum var) / n, which
+      # is 2 sqrt(phi / n) for Pearson residuals
+      band   = 2 * sqrt(sum(rv)) / n(),
       .groups = "drop"
-    ) %>%
-    # [DIAG-03]
-    mutate(band = 2 * sqrt(disp / n))
+    )
   agg <- if (x_numeric) agg %>% arrange(x_plot) else agg %>% arrange(bin_group)
 
   ht_mean <- paste0("<b>", xlab, ":</b> %{x}",
@@ -310,7 +379,8 @@ plot_glm_residuals <- function(model, predictor = NULL, n_bins = 50,
                                   xlab),
                     font = list(color = ta_navy, size = 14)),
       xaxis  = xaxis_cfg,
-      yaxis  = list(title = paste("Mean", residual_type, "residual"),
+      yaxis  = list(title = paste0("Mean ", residual_type, " residual",
+                                   if (centred) ", centred" else ""),
                     gridcolor = "#D0D8E0", zeroline = FALSE,
                     range = y_range, autorange = is.null(y_range)),
       shapes = list(list(type = "line", xref = "paper",

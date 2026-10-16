@@ -40,5 +40,6 @@ utils::globalVariables(c(
   "observed", "predicted", "weight", "weight_sum",
   "var_unit", "prior_w", "se_observed",
   "avg_observed", "avg_predicted", "mean_r", "band",
-  "E", "C", "w", "ch"
+  "E", "C", "w", "ch", ".lvl", ".e", ".c",
+  "OldPremium", "NewPremium", "PremiumShare", "TotalChangePct"
 ))

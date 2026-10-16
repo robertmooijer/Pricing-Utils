@@ -74,6 +74,9 @@ plot_residual_heatmap <- function(model, var_x, var_y,
 
   if (!inherits(model, "glm"))
     stop("plot_residual_heatmap: 'model' must be a glm object.", call. = FALSE)
+  # [DATA-06] with na.exclude the expected values were padded and shifted
+  # against the actuals, so the cells were silently wrong
+  model   <- .as_na_omit(model)
   z_range <- .check_range(z_range, "plot_residual_heatmap", "z_range")
 
   parts <- .glm_ae_parts(model, "plot_residual_heatmap")
@@ -113,8 +116,21 @@ plot_residual_heatmap <- function(model, var_x, var_y,
     format(round(cells$Exposure), big.mark = ",", trim = TRUE),
     ifelse(cells$IsThin, "<br><i>too few claims - not coloured</i>", ""))
 
-  p <- plot_ly() %>%
-    add_trace(
+  # [INT-02]
+  # With every cell thin there is nothing to colour, and plotly cannot build
+  # a heatmap whose values are all NA, whatever its colour range: it failed
+  # with "Wasn't able to determine range of domain", which took a whole
+  # report down on a small book. The colour layer is then left out and the
+  # crosses, with their tooltips, are the plot.
+  all_thin <- all(is.na(z))
+  if (all_thin)
+    warning("plot_residual_heatmap: every cell of ", var_x, " x ", var_y,
+            " has fewer than ", min_claims, " claims, so none is coloured. ",
+            "Lower 'min_claims' or 'n_bins' to see more.", call. = FALSE)
+
+  p <- plot_ly()
+  if (!all_thin)
+    p <- p %>% add_trace(
       x = lx, y = ly, z = z, type = "heatmap",
       colorscale = .ta_diverging, zmid = 1,
       zmin = if (is.null(z_range)) NULL else z_range[1],
@@ -180,6 +196,19 @@ plot_residual_heatmap <- function(model, var_x, var_y,
 #' the dispersion-scaled chi-square is used instead (reported in the
 #' `Method` column).
 #'
+#' Claim counts are nearly always **overdispersed**, and a Poisson null
+#' reads that extra variance as interaction: on ten books with a dispersion
+#' of 1.9 and no interaction at all, 33 of 60 pairs came out at `P` < 0.05
+#' where 3 would be expected. The deviance is therefore divided by the
+#' dispersion of a cell total, `phi = sum((y - mu)^2) / sum(mu)` over the
+#' rows, and the simulation draws from a Poisson with the expected values
+#' divided by `phi`, which is the quasi-Poisson scaling of a cell total.
+#' That is not the row-level Pearson dispersion of [glm_diagnostics()]: a
+#' cell total adds rows by their mean, and under a gamma frailty the rows
+#' with a larger mean carry more of the extra variance (measured 1.91
+#' against 1.72). A dispersion below 1 is left at 1. The value used is in
+#' the `Dispersion` column.
+#'
 #' The ranking is by statistical signal (`Z`), which is not the same thing
 #' as materiality: an effect can be highly significant and commercially
 #' irrelevant, or the reverse. `MaxAE` and `MaxAE_ExposureShare` are
@@ -198,9 +227,9 @@ plot_residual_heatmap <- function(model, var_x, var_y,
 #' @param seed Optional seed, for a reproducible reference distribution.
 #'
 #' @return A data.frame, strongest first, with one row per pair: `VarX`,
-#'   `VarY`, `Cells`, `Claims`, `Deviance`, `DF`, `Z`, `P`, `Method`,
-#'   `MaxAE` (A/E of the worst non-thin cell), `MaxAE_Claims` and
-#'   `MaxAE_ExposureShare`.
+#'   `VarY`, `Cells`, `Claims`, `Deviance` (before the dispersion scaling),
+#'   `DF`, `Z`, `P`, `Method`, `Dispersion`, `MaxAE` (A/E of the worst
+#'   non-thin cell), `MaxAE_Claims` and `MaxAE_ExposureShare`.
 #' @seealso [plot_residual_heatmap()] to inspect a pair.
 #' @export
 detect_interactions <- function(model, vars = NULL, n_bins = 10,
@@ -209,6 +238,8 @@ detect_interactions <- function(model, vars = NULL, n_bins = 10,
 
   if (!inherits(model, "glm"))
     stop("detect_interactions: 'model' must be a glm object.", call. = FALSE)
+  # [DATA-06]
+  model <- .as_na_omit(model)
   # [CONV-08]
   if (!is.null(seed)) set.seed(seed)
 
@@ -259,6 +290,34 @@ detect_interactions <- function(model, vars = NULL, n_bins = 10,
             "dispersion-scaled chi-square rather than simulation; it is ",
             "less reliable in sparse tables.")
 
+  # [INT-05]
+  # Overdispersion is variance the Poisson null does not have, and it read
+  # as interaction: with a dispersion of 1.9 and no interaction, 33 of 60
+  # pairs came out at P < 0.05. With a cell total of variance phi x its
+  # mean, D / phi is compared with a Poisson null on means E / phi; the
+  # deviance is homogeneous of degree one, so that is the same test on
+  # rescaled counts.
+  #
+  # The phi of a cell total is not the row-level Pearson one. A total adds
+  # rows by their mean, so it is sum((y - mu)^2) / sum(mu), a mean-weighted
+  # Pearson. Under a gamma frailty, Var(y) = mu + mu^2 / theta, that is
+  # larger whenever the means vary across rows: measured 1.72 for the
+  # row-level Pearson against 1.91 for this one and 1.91 for the totals of
+  # random partitions of the same rows, and with 1.72 the scan still found
+  # 8 of 60 pairs at P < 0.05. Under a constant phi the two agree. Below 1
+  # it stays 1.
+  phi_s <- phi
+  if (boot) {
+    a <- parts$actual; e <- parts$expected
+    phi_s <- sum((a - e)^2) / sum(e) * length(a) / max(1, model$df.residual)
+    phi_s <- if (is.finite(phi_s)) max(1, phi_s) else 1
+    if (phi_s >= 1.2)
+      message("detect_interactions: the claim counts are overdispersed ",
+              "(dispersion of a cell total ", round(phi_s, 2), "), so the ",
+              "simulation is scaled by it; without that, overdispersion ",
+              "reads as interaction.")
+  }
+
   pairs <- utils::combn(vars, 2, simplify = FALSE)
   rows  <- lapply(pairs, function(pr) tryCatch({
     gx <- grp[[pr[1]]]; gy <- grp[[pr[2]]]
@@ -276,12 +335,14 @@ detect_interactions <- function(model, vars = NULL, n_bins = 10,
     if (dfr < 1) return(NULL)
 
     if (boot) {
+      Es  <- Er / phi_s
+      Ds  <- D / phi_s
       sim <- vapply(seq_len(n_sim), function(i) {
-        As <- matrix(stats::rpois(length(Er), Er), nrow(Er), ncol(Er))
-        dev_of(As, rake(As, Er))
+        As <- matrix(stats::rpois(length(Es), Es), nrow(Es), ncol(Es))
+        dev_of(As, rake(As, Es))
       }, numeric(1))
-      z <- (D - mean(sim)) / stats::sd(sim)
-      p <- (1 + sum(sim >= D)) / (n_sim + 1)
+      z <- (Ds - mean(sim)) / stats::sd(sim)
+      p <- (1 + sum(sim >= Ds)) / (n_sim + 1)
       meth <- "simulation"
     } else {
       z <- (D / phi - dfr) / sqrt(2 * dfr)
@@ -298,6 +359,7 @@ detect_interactions <- function(model, vars = NULL, n_bins = 10,
       VarX = pr[1], VarY = pr[2],
       Cells = sum(C > 0), Claims = sum(C),
       Deviance = D, DF = dfr, Z = z, P = p, Method = meth,
+      Dispersion = phi_s,
       MaxAE = if (is.na(worst)) NA_real_ else ae[worst],
       MaxAE_Claims = if (is.na(worst)) NA_real_ else C[worst],
       MaxAE_ExposureShare = if (is.na(worst)) NA_real_ else W[worst] / sum(W),

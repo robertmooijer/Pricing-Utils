@@ -29,10 +29,11 @@ test_that("intercept x factors reconstructs the model prediction exactly", {
 
 test_that("intercept is per unit of exposure", {
   i_f <- attr(tbl, "intercept_frequency")
+  # the accounting year sits at its latest level by default (RT-15)
   base_pred <- predict(m_freq, newdata = data.frame(
     LEEFTIJD = median(dat$LEEFTIJD),
     REGIO = factor("Noord", levels(dat$REGIO)),
-    BOEKJAAR = 2019, Exposure = 1), type = "response")
+    BOEKJAAR = 2023, Exposure = 1), type = "response")
   expect_true(abs(i_f - base_pred) < 1e-10)
 })
 
@@ -592,9 +593,13 @@ test_that("a regrouped column missing from 'data' is taken from the model", {
   expect_error(make_rating_table(mf, ms3, data = dm, merge_vars = mv),
                "do not occur in the data the severity model")
 
-  # a model that carries no data of its own cannot be read either
+  # a model without model$data, as glm.nb() leaves it, is read through the
+  # data its call names (DATA-05)
   ms4 <- ms; ms4$data <- environment()
-  expect_error(make_rating_table(mf, ms4, data = dm, merge_vars = mv),
+  expect_equal(make_rating_table(mf, ms4, data = dm, merge_vars = mv), t1)
+  # but a model whose data cannot be found at all cannot be read
+  ms5 <- ms4; ms5$call$data <- quote(no_such_data_frame)
+  expect_error(make_rating_table(mf, ms5, data = dm, merge_vars = mv),
                "carries none")
 
   # a column that exists nowhere is not a merge at all

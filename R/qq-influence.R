@@ -61,6 +61,18 @@
     "inverse.gaussian" = NULL,
     NULL)
 
+  # [DIAG-08]
+  # A negative binomial, from MASS::glm.nb() or MASS::negative.binomial(),
+  # names its theta in the family name, so it falls through the switch. Its
+  # CDF is closed form too. With prior weights the likelihood is a weighted
+  # one and no longer a distribution per row, so that case falls back.
+  th <- .nb_theta(model)
+  if (is.null(u) && !is.null(th) && all(abs(w - 1) < 1e-12)) {
+    a <- stats::pnbinom(y - 1, size = th, mu = mu)
+    b <- stats::pnbinom(y, size = th, mu = mu)
+    u <- stats::runif(length(y), a, b)
+  }
+
   if (is.null(u)) return(NULL)
   # Guard the tails: a u of exactly 0 or 1 would become -Inf / Inf and drop
   # the very observation the plot is about
@@ -134,7 +146,8 @@
 #' which is what the plot is for.
 #'
 #' @param model A fitted glm object. Poisson, quasipoisson, binomial,
-#'   Gamma and gaussian families are supported; for anything else the
+#'   Gamma and gaussian families are supported, and the negative binomial
+#'   of `MASS::glm.nb()` without prior weights; for anything else the
 #'   function falls back to deviance residuals and says so.
 #' @param n_max Plot at most this many points, evenly spaced through the
 #'   sorted residuals with both extremes always kept (default 5000). The
@@ -158,6 +171,9 @@ plot_glm_qq <- function(model, n_max = 5000, band = TRUE, seed = NULL,
 
   if (!inherits(model, "glm"))
     stop("plot_glm_qq: 'model' must be a glm object.", call. = FALSE)
+  # [DATA-06] with na.exclude the fitted values were padded with NA and
+  # recycled against the response, so the plot was silently wrong
+  model <- .as_na_omit(model)
   if (n_max < 10)
     stop("plot_glm_qq: 'n_max' must be at least 10.", call. = FALSE)
   y_range <- .check_range(y_range, "plot_glm_qq")
@@ -330,6 +346,8 @@ plot_glm_influence <- function(model, n_label = 10, data_cols = NULL,
 
   if (!inherits(model, "glm"))
     stop("plot_glm_influence: 'model' must be a glm object.", call. = FALSE)
+  # [DATA-06]
+  model <- .as_na_omit(model)
   if (n_label < 1)
     stop("plot_glm_influence: 'n_label' must be at least 1.", call. = FALSE)
   y_range <- .check_range(y_range, "plot_glm_influence")
@@ -353,7 +371,7 @@ plot_glm_influence <- function(model, n_label = 10, data_cols = NULL,
       stop("plot_glm_influence: training data cannot be recovered, so the ",
            "model cannot be refitted on a sample; fit it with a 'data =' ",
            "argument or pass max_rows = NULL.", call. = FALSE)
-    model <- stats::update(model, data = d_s)
+    model <- .as_na_omit(stats::update(model, data = d_s))
     tr    <- .glm_training_data(model, "plot_glm_influence")
   }
 

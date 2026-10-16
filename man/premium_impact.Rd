@@ -19,7 +19,9 @@ premium_impact(
   spotlight = NULL,
   x_range = NULL,
   y_range = NULL,
-  keep_offsets = TRUE
+  keep_offsets = TRUE,
+  at = NULL,
+  year_col = "BOEKJAAR"
 )
 }
 \arguments{
@@ -41,10 +43,14 @@ exposure).}
 \item{rebase}{\code{TRUE} = scale new premiums to the old total (default).}
 
 \item{by}{Optional character vector of columns for a per-level impact
-breakdown. Besides the exposure-weighted mean change per level, this
-gives \verb{Contribution = ExposureShare x MeanChangePct}, which sums over
-the levels of one variable to the portfolio change and so answers
-which segment is driving it.}
+breakdown. Per level it gives the exposure-weighted mean change of the
+policies (\code{MeanChangePct}, what a customer in that level sees on
+average), the change of the level's total premium (\code{TotalChangePct}),
+its share of the old premium (\code{PremiumShare}) and
+\verb{Contribution = PremiumShare x TotalChangePct}: the level's part of
+the change in the total premium. The contributions of one variable sum
+to that change exactly - to 0 after a rebase - and so answer which
+segment drives it.}
 
 \item{n_show}{Number of rows in the winners/losers tables (default 10).}
 
@@ -86,14 +92,29 @@ not on \code{exposure_col} at all, and an offset that holds the exposure
 and something else in one expression, \code{offset(log(Exposure * BM))},
 which is reported in a warning. The \code{summary} names the offsets that
 stayed in.}
+
+\item{at}{Optional named list of values to price every policy at, e.g.
+\code{list(BOEKJAAR = 2024)}. Applied to the data the models score, not to
+an old premium column. With the accounting year as a rating factor
+each policy is otherwise priced at the level of its own historic year,
+which against a current premium mixes inflation into the dislocation:
+measured, a rate-level change of +11.1\% on the historic years against
++34.7\% at the tariff year.}
+
+\item{year_col}{Accounting-year column (default \code{"BOEKJAAR"}). When the
+new models use it against an old premium column, or only one of the
+two model sets uses it, and \code{at} does not set it, a warning says so.
+Two model sets that both use it price every policy at the same year on
+both sides, which is like for like. \code{NULL} switches the warning off.}
 }
 \value{
 A list with \code{summary} (display table with the headline numbers),
 \code{stats} (the same numbers as a named list), \code{policy} (per-row
 \code{OldRate}, \code{NewRate}, \code{NewRateRebased}, \code{ChangePct}), \code{by_level}
-(per level: exposure, share, mean change and contribution, when \code{by}
-is given), \code{spotlight} (the same headline numbers for the subset, when
-\code{spotlight} is given), \code{largest_increases} / \code{largest_decreases}
+(per level: exposure and its share, old premium and its share, mean
+and total change, and contribution, when \code{by} is given), \code{spotlight}
+(the same headline numbers for the subset, when \code{spotlight} is
+given), \code{largest_increases} / \code{largest_decreases}
 (top-\code{n_show} dislocations) and \code{plot} (exposure-weighted histogram of
 the premium changes, with the spotlight overlaid).
 }

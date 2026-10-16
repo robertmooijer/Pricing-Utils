@@ -5,12 +5,17 @@
 #'
 #' Base convention: the base level is the reference level for categorical
 #' variables (first xlevel, or the level with the largest exposure when
-#' `base_level = "exposure"`), the median for continuous variables (added
-#' as an explicit grid point, `IsBase = TRUE`), and 1 for the exposure
-#' column. As a result, for log-link models without interactions the
-#' identity holds exactly: intercept x product(factors) = model prediction
-#' per exposure unit. A variable that is absent from one of the two models
-#' gets the neutral factor 1 there (so `Factor_Premium` remains correct).
+#' `base_level = "exposure"`), the latest year for the accounting year
+#' (`year_col`), the median for continuous variables (added as an explicit
+#' grid point, `IsBase = TRUE`), and 1 for the exposure column. As a
+#' result, for log-link models without interactions the identity holds
+#' exactly: intercept x product(factors) = model prediction per exposure
+#' unit. A variable that is absent from one of the two models gets the
+#' neutral factor 1 there (so `Factor_Premium` remains correct).
+#'
+#' A term that turns a column into a factor inside the formula, such as
+#' `cut(LEEFTIJD, c(17, 24, 40, 65, 99))`, is reported on its bands; a
+#' logical column (`GARAGE = TRUE`) on `TRUE` and `FALSE`.
 #'
 #' Interaction rows contain the joint relativity relative to the base cell
 #' and the pure uplift: joint / (main_factor_x * main_factor_group). They
@@ -21,7 +26,17 @@
 #'
 #' Levels backed by fewer than `min_claims` claims get `IsThin = TRUE`
 #' (thin categorical levels also raise a warning) and are dimmed in
-#' [make_rating_plot()].
+#' [make_rating_plot()]. That flag counts claims; the precision of a factor
+#' is in `SE_Frequency` and `SE_Severity`, the standard error of its
+#' logarithm from the model's covariance matrix. A level with 31 claims
+#' passes the flag with a standard error of 0.18, which is a 95% interval
+#' of x0.70 to x1.42 around its factor.
+#'
+#' A level that is in `data` but not in the data a model was fitted on,
+#' typically a level without claims that the severity model never saw,
+#' keeps its row: the factor of that model is `NA` there, and so is the
+#' premium factor, with a warning. Only a base row the model does not know
+#' is an error, since every factor is a ratio against it.
 #'
 #' @param model_freq,model_sev Fitted glm objects (at least one; log link
 #'   expected, a warning is raised otherwise).
@@ -114,12 +129,24 @@
 #'   shrinkage to a categorical level, so such a factor comes essentially
 #'   from those few claims; it is dimmed by [make_rating_plot()] and
 #'   greyed out by [export_rating_table()]. Thin categorical levels also
-#'   raise a warning.
+#'   raise a warning, which names the levels without any claim as well.
+#' @param year_col Accounting year column (default `"BOEKJAAR"`), or
+#'   `NULL`. When a model uses it as a rating factor, its default base is
+#'   the latest year rather than the first level, so the intercept is the
+#'   current price level instead of the oldest one; the other factors do
+#'   not change. `base` still overrides it, e.g. `list(BOEKJAAR = 2023)`.
+#' @param loss_col Loss amount column (default `"SCHADELAST"`), read only
+#'   to warn when claims without payment would make frequency x severity
+#'   overstate the risk premium.
 #'
 #' @return A data.frame with one row per level/grid point per variable
 #'   (columns `Variable`, `Type`, `Level`, `LevelNum`, `Group`, `IsBase`,
-#'   `Exposure`, `ClaimCount`, `Factor_*`, `Uplift_*`, `IsThin`, `XVar`,
-#'   `GroupVar`). The three `Uplift_*` columns are present **only when the
+#'   `Exposure`, `ClaimCount`, `Factor_*`, `Uplift_*`, `SE_Frequency`,
+#'   `SE_Severity`, `IsThin`, `XVar`, `GroupVar`). `SE_*` is the standard
+#'   error of the logarithm of the factor in that row: 0 at the base and
+#'   for a variable the model does not use, `NA` where there is no factor.
+#'   On an interaction row it belongs to the joint relativity against the
+#'   base cell. The three `Uplift_*` columns are present **only when the
 #'   model contains at least one interaction term**; without one they would
 #'   be `NA` in every row, so they are dropped. `Group` and `GroupVar` are
 #'   always there, because `is.na(Group)` is how a main-effect row is told
@@ -139,7 +166,9 @@ make_rating_table <- function(model_freq = NULL,
                               min_claims   = 30,
                               grid_step    = NULL,
                               base         = NULL,
-                              merge_vars   = NULL) {
+                              merge_vars   = NULL,
+                              year_col     = "BOEKJAAR",
+                              loss_col     = "SCHADELAST") {
 
   base_level <- match.arg(base_level)
   if (is.null(model_freq) && is.null(model_sev)) {
@@ -200,6 +229,62 @@ make_rating_table <- function(model_freq = NULL,
   var_levels <- function(bv) {
     if (!is.null(xlev_all[[bv]])) xlev_all[[bv]] else levels(factor(data[[bv]]))
   }
+
+  # [RT-11]
+  # An inline term that turns a column into a factor - cut(LEEFTIJD, ...), an
+  # ifelse() - has levels that are not values of the column: "(24,30]" cannot
+  # be put back into LEEFTIJD. Predicting on the label gave NA in every row,
+  # the intercept included, since every prediction shares the base row. Such
+  # a variable is run through the model on one representative value per
+  # level instead - the most frequent value of the column within the level,
+  # which falls in it by definition - and its volumes are counted on the
+  # evaluated term. factor(BOEKJAAR) needs none of this: "2021" is a year.
+  xterm <- list(); xenv <- list()
+  for (m in list(model_freq, model_sev)) {
+    if (is.null(m) || !length(m$xlevels)) next
+    for (nm in names(m$xlevels)) {
+      bv <- base_var(nm)
+      if (is.null(xterm[[bv]])) {
+        xterm[[bv]] <- nm
+        xenv[[bv]]  <- environment(formula(m))
+      }
+    }
+  }
+  decoder <- list()
+  for (bv in names(xterm)) {
+    if (!bv %in% names(data)) next
+    lv <- xlev_all[[bv]]
+    if (!anyNA(.coerce_like(lv, data[[bv]]))) next
+    rows <- tryCatch(as.character(eval(str2lang(xterm[[bv]]), data,
+                                       xenv[[bv]])), error = function(e) NULL)
+    if (is.null(rows) || length(rows) != nrow(data)) next
+    rep_val <- vapply(lv, function(l) {
+      x <- data[[bv]][!is.na(rows) & rows == l]
+      if (!length(x)) return(NA_character_)
+      names(sort(table(as.character(x)), decreasing = TRUE))[1]
+    }, character(1))
+    decoder[[bv]] <- list(rows = rows, value = rep_val)
+  }
+  # The values that go into a prediction frame for labels of a variable
+  to_model <- function(bv, vals) {
+    dc <- decoder[[bv]]
+    if (is.null(dc)) return(.coerce_like(vals, data[[bv]]))
+    .coerce_like(unname(dc$value[as.character(vals)]), data[[bv]])
+  }
+  # The level each row of `data` is in, for the volumes
+  row_level <- function(bv) {
+    dc <- decoder[[bv]]
+    if (is.null(dc)) as.character(data[[bv]]) else dc$rows
+  }
+  # The most recent level of an accounting year, for its default base
+  latest_of <- function(lv) {
+    num <- suppressWarnings(as.numeric(lv))
+    if (!anyNA(num)) lv[which.max(num)] else lv[length(lv)]
+  }
+  if (!is.null(year_col) &&
+      (!is.character(year_col) || length(year_col) != 1 || is.na(year_col)))
+    stop("make_rating_table: 'year_col' must be one column name or NULL.",
+         call. = FALSE)
 
   # [MV-01]
   # One rating factor under two column names --------------------------------
@@ -296,7 +381,7 @@ make_rating_table <- function(model_freq = NULL,
   # rating factor, both have to move or the merged block would hold one
   # model at its base value while the other moves.
   set_var <- function(newd, vars, bv, vals) {
-    if (bv %in% vars) newd[[bv]] <- .coerce_like(vals, data[[bv]])
+    if (bv %in% vars) newd[[bv]] <- to_model(bv, vals)
     for (a in alias_of[[bv]]) if (a %in% vars)
       newd[[a]] <- .coerce_like(alias_values(a, vals), data[[a]])
     newd
@@ -325,9 +410,15 @@ make_rating_table <- function(model_freq = NULL,
       # A level named in `base` wins over base_level for that variable
       if (!is.null(base) && bv %in% names(base))
         return(as.character(base[[bv]]))
+      # [RT-15] the accounting year sits at its latest level by default, so
+      # the intercept is the current price level and not the oldest one
+      if (!is.null(year_col) && identical(bv, year_col))
+        return(latest_of(lv))
       if (base_level == "exposure") {
-        ag   <- d_dt[, .(E = sum(get(exposure_col), na.rm = TRUE)), by = bv]
-        cand <- as.character(ag[[bv]])[order(-ag$E)]
+        ag   <- data.table::data.table(.lvl = row_level(bv),
+                                       .e = data[[exposure_col]])[
+          , .(E = sum(.e, na.rm = TRUE)), by = .lvl]
+        cand <- as.character(ag$.lvl)[order(-ag$E)]
         lev  <- cand[cand %in% lv][1]
         if (is.na(lev)) lev <- lv[1]
         lev
@@ -354,7 +445,9 @@ make_rating_table <- function(model_freq = NULL,
     if (length(missing_vars))
       stop("variable(s) from the model formula not in 'data': ",
            paste(missing_vars, collapse = ", "))
-    row <- lapply(vars, function(nm) .coerce_like(base_value_raw(nm), data[[nm]]))
+    row <- lapply(vars, function(nm)
+      if (!is.null(merge_map[[nm]])) .coerce_like(base_value_raw(nm), data[[nm]])
+      else to_model(nm, base_value_raw(nm)))
     names(row) <- vars
     # check.names = FALSE, or a column such as "AUTO GEWICHT" is silently
     # renamed to "AUTO.GEWICHT" here and every predict() on this row fails
@@ -367,15 +460,64 @@ make_rating_table <- function(model_freq = NULL,
   # with intercept_val. Variable not in the model -> neutral factor 1.
   predict_factor <- function(model, var_name, grid_vals) {
     n <- length(grid_vals)
-    if (is.null(model)) return(rep(NA_real_, n))
+    if (is.null(model))
+      return(list(factor = rep(NA_real_, n), se = rep(NA_real_, n)))
     vars <- .rhs_vars(model)
-    if (!any(spellings(var_name) %in% vars)) return(rep(1, n))
+    if (!any(spellings(var_name) %in% vars))
+      return(list(factor = rep(1, n), se = rep(0, n)))
     base_df <- base_df_for(model)
     newd    <- base_df[rep(1, n), , drop = FALSE]
     newd    <- set_var(newd, vars, var_name, grid_vals)
-    preds <- as.numeric(predict(model, newdata = newd,   type = "response"))
-    ref   <- as.numeric(predict(model, newdata = base_df, type = "response"))
-    preds / ref
+    ok      <- .predictable_rows(model, newd)
+    preds   <- predict_rows(model, newd, ok)
+    ref     <- as.numeric(predict(model, newdata = base_df, type = "response"))
+    list(factor = preds / ref, se = se_of(model, newd, base_df, ok))
+  }
+
+  # [RT-10]
+  # Predictions with the rows the model cannot be asked about left as NA. A
+  # level that exists in the data but not in the data a model was fitted on
+  # - a fuel type with exposure but no claims, which the severity model
+  # therefore never saw - has no factor in that model. That is one empty
+  # cell, not a reason to lose the whole variable from the table.
+  predict_rows <- function(model, newd, ok) {
+    out <- rep(NA_real_, nrow(newd))
+    if (any(ok))
+      out[ok] <- as.numeric(predict(model, newdata = newd[ok, , drop = FALSE],
+                                    type = "response"))
+    out
+  }
+
+  # [RT-12]
+  # Standard error of log(Factor), from the model's own covariance matrix:
+  # log(Factor) = (x_row - x_base)' beta, so its variance is d' V d with d
+  # the difference of the two model-matrix rows. That holds for any term a
+  # model can carry - spline, interaction, inline factor - because the
+  # model matrix is built exactly as predict() builds it. A volume flag
+  # cannot say this: a level with 31 claims passes min_claims = 30 with a
+  # standard error of 0.18, a 95% interval of x0.70 to x1.42. Only for a log
+  # link, where log(Factor) is linear in the coefficients.
+  se_of <- function(model, newd, base_df, ok) {
+    out <- rep(NA_real_, nrow(newd))
+    if (is.null(model) || !identical(family(model)$link, "log") || !any(ok))
+      return(out)
+    V  <- tryCatch(stats::vcov(model), error = function(e) NULL)
+    cf <- stats::coef(model)
+    cf <- names(cf)[!is.na(cf)]
+    if (is.null(V) || !all(cf %in% colnames(V))) return(out)
+    tt  <- stats::delete.response(stats::terms(model))
+    mmx <- function(nd) {
+      mf <- stats::model.frame(tt, nd, xlev = model$xlevels,
+                               na.action = stats::na.pass)
+      X  <- stats::model.matrix(tt, mf, contrasts.arg = model$contrasts)
+      X[, cf, drop = FALSE]
+    }
+    X <- tryCatch(mmx(newd[ok, , drop = FALSE]), error = function(e) NULL)
+    B <- tryCatch(mmx(base_df), error = function(e) NULL)
+    if (is.null(X) || is.null(B)) return(out)
+    D <- sweep(X, 2, B[1, ])
+    out[ok] <- sqrt(pmax(rowSums((D %*% V[cf, cf, drop = FALSE]) * D), 0))
+    out
   }
 
   # [RT-06]
@@ -383,14 +525,17 @@ make_rating_table <- function(model_freq = NULL,
   # base cell (index i_base). vx varies fastest.
   predict_factor_2d <- function(model, vx, gx, vg, gg, i_base) {
     n <- length(gx) * length(gg)
-    if (is.null(model)) return(rep(NA_real_, n))
+    if (is.null(model))
+      return(list(factor = rep(NA_real_, n), se = rep(NA_real_, n)))
     vars    <- .rhs_vars(model)
     base_df <- base_df_for(model)
     newd    <- base_df[rep(1, n), , drop = FALSE]
     newd <- set_var(newd, vars, vx, rep(gx, times = length(gg)))
     newd <- set_var(newd, vars, vg, rep(gg, each  = length(gx)))
-    preds <- as.numeric(predict(model, newdata = newd, type = "response"))
-    preds / preds[i_base]
+    ok    <- .predictable_rows(model, newd)
+    preds <- predict_rows(model, newd, ok)
+    list(factor = preds / preds[i_base],
+         se = se_of(model, newd, newd[i_base, , drop = FALSE], ok))
   }
 
   # [RT-04] [RT-02]
@@ -430,6 +575,10 @@ make_rating_table <- function(model_freq = NULL,
       out <- list(values = .step_grid(rng[1], rng[2], step, b0),
                   base = b0, step = step)
     }
+    # [RT-15] a numeric accounting year (a trend term) sits at its latest
+    # grid value, like a factor(BOEKJAAR) at its latest level
+    if (!is.null(year_col) && identical(bv, year_col))
+      out$base <- max(out$values)
     # A base chosen in `base` replaces the median. It is put on the grid
     # exactly as given - the user asked for 40, not for the nearest grid
     # point - after dropping any grid value that is the same number up to
@@ -450,14 +599,20 @@ make_rating_table <- function(model_freq = NULL,
   # them, the same rule the main-effect exposure histogram uses. Returns
   # NA outside a trimmed range, so the volume of policies the grid does not
   # cover is not swept into the edge cells.
-  cell_index <- function(bv, grid_vals, is_cat) {
-    if (is_cat) return(match(as.character(data[[bv]]),
-                             as.character(grid_vals)))
+  #
+  # [RT-16] The trimming applies to a grid that spans the trimmed range, not
+  # to the three slices of a continuous group variable in an interaction:
+  # those stand for the whole distribution, and cutting at the outer slices
+  # threw away everything below the 10% and above the 90% quantile, a fifth
+  # of the exposure of every interaction block.
+  cell_index <- function(bv, grid_vals, is_cat, drop_outside = TRUE) {
+    if (is_cat) return(match(row_level(bv), as.character(grid_vals)))
     x <- data[[bv]]
     brks <- c(-Inf, grid_vals[-1] - diff(grid_vals) / 2, Inf)
     i <- findInterval(x, brks)
     outside <- x < min(grid_vals) | x > max(grid_vals)
-    if (!isTRUE(all.equal(trim, c(0, 1)))) i[outside %in% TRUE] <- NA_integer_
+    if (drop_outside && !isTRUE(all.equal(trim, c(0, 1))))
+      i[outside %in% TRUE] <- NA_integer_
     i
   }
 
@@ -600,6 +755,28 @@ make_rating_table <- function(model_freq = NULL,
               ".", call. = FALSE)
   }
 
+  # [RT-10]
+  # Every factor is a ratio against the base row, so a base row a model was
+  # never fitted on would empty the whole table. Caught once, up front, with
+  # the value that causes it.
+  for (mm in list(list(m = model_freq, nm = "frequency"),
+                  list(m = model_sev,  nm = "severity"))) {
+    if (is.null(mm$m)) next
+    un <- .unseen_levels(mm$m, base_df_for(mm$m))
+    if (length(un))
+      stop("make_rating_table: the base row has ",
+           paste(vapply(names(un), function(cl)
+             paste0("'", cl, "' = ", un[[cl]]$values[1]), character(1)),
+             collapse = "; "),
+           ", which the ", mm$nm, " model was not fitted on (a level without ",
+           "claims, say). Choose a base that model knows, with base = or ",
+           "base_level = \"exposure\".", call. = FALSE)
+  }
+
+  # [RT-13] claims without payment overstate frequency x severity
+  .nil_claims_warning(model_freq, model_sev, data, claims_col, loss_col,
+                      "make_rating_table")
+
   # [RT-06]
   # Two-way interaction pairs (base variables) from both models, deduplicated
   gather_pairs <- function() {
@@ -639,12 +816,14 @@ make_rating_table <- function(model_freq = NULL,
       is_base   <- grid_vals == base_raw
     }
 
-    # Exposure / claims aggregation
+    # Exposure / claims aggregation, per level as the model sees it (for a
+    # cut() term that is the band a row falls in, [RT-11])
     if (is_cat) {
-      ag <- d_dt[, .(Exposure   = sum(get(exposure_col), na.rm = TRUE),
-                     ClaimCount = sum(get(claims_col),   na.rm = TRUE)),
-                 by = bv]
-      data.table::setnames(ag, bv, "Level")
+      ag <- data.table::data.table(Level = row_level(bv),
+                                   .e = data[[exposure_col]],
+                                   .c = data[[claims_col]])[
+        , .(Exposure = sum(.e, na.rm = TRUE), ClaimCount = sum(.c, na.rm = TRUE)),
+        by = Level]
       ag$Level <- as.character(ag$Level)
       exposure    <- ag$Exposure[match(as.character(grid_vals), ag$Level)]
       claim_count <- ag$ClaimCount[match(as.character(grid_vals), ag$Level)]
@@ -671,8 +850,8 @@ make_rating_table <- function(model_freq = NULL,
     }
 
     # Retrieve factors per model
-    f_freq <- predict_factor(model_freq, bv, grid_vals)
-    f_sev  <- predict_factor(model_sev,  bv, grid_vals)
+    p_freq <- predict_factor(model_freq, bv, grid_vals)
+    p_sev  <- predict_factor(model_sev,  bv, grid_vals)
 
     data.frame(
       Variable         = bv,
@@ -683,9 +862,11 @@ make_rating_table <- function(model_freq = NULL,
       IsBase           = is_base,
       Exposure         = exposure,
       ClaimCount       = claim_count,
-      Factor_Frequency = f_freq,
-      Factor_Severity  = f_sev,
-      Factor_Premium   = f_freq * f_sev,
+      Factor_Frequency = p_freq$factor,
+      Factor_Severity  = p_sev$factor,
+      Factor_Premium   = p_freq$factor * p_sev$factor,
+      SE_Frequency     = p_freq$se,
+      SE_Severity      = p_sev$se,
       Uplift_Frequency = NA_real_,
       Uplift_Severity  = NA_real_,
       Uplift_Premium   = NA_real_,
@@ -751,7 +932,7 @@ make_rating_table <- function(model_freq = NULL,
     # where a portfolio runs out of data, so this is the place the thin-cell
     # flag earns its keep.
     ci <- cell_index(xv, gx, cx)
-    cj <- cell_index(gv, gg, cg)
+    cj <- cell_index(gv, gg, cg, drop_outside = FALSE)   # [RT-16]
     ag <- data.table::data.table(
       ci = ci, cj = cj,
       E  = data[[exposure_col]],
@@ -763,14 +944,15 @@ make_rating_table <- function(model_freq = NULL,
     expo[lin] <- ag$E
     clm[lin]  <- ag$C
 
-    ff <- predict_factor_2d(model_freq, xv, gx, gv, gg, i_base)
-    fs <- predict_factor_2d(model_sev,  xv, gx, gv, gg, i_base)
+    p2f <- predict_factor_2d(model_freq, xv, gx, gv, gg, i_base)
+    p2s <- predict_factor_2d(model_sev,  xv, gx, gv, gg, i_base)
+    ff <- p2f$factor; fs <- p2s$factor
 
     # Pure interaction uplift: joint / (main_factor_x * main_factor_group)
-    uf <- ff / (rep(predict_factor(model_freq, xv, gx), times = ng) *
-                rep(predict_factor(model_freq, gv, gg), each  = nx))
-    us <- fs / (rep(predict_factor(model_sev,  xv, gx), times = ng) *
-                rep(predict_factor(model_sev,  gv, gg), each  = nx))
+    uf <- ff / (rep(predict_factor(model_freq, xv, gx)$factor, times = ng) *
+                rep(predict_factor(model_freq, gv, gg)$factor, each  = nx))
+    us <- fs / (rep(predict_factor(model_sev,  xv, gx)$factor, times = ng) *
+                rep(predict_factor(model_sev,  gv, gg)$factor, each  = nx))
 
     data.frame(
       Variable         = paste(b1, b2, sep = ":"),
@@ -784,6 +966,8 @@ make_rating_table <- function(model_freq = NULL,
       Factor_Frequency = ff,
       Factor_Severity  = fs,
       Factor_Premium   = ff * fs,
+      SE_Frequency     = p2f$se,
+      SE_Severity      = p2s$se,
       Uplift_Frequency = uf,
       Uplift_Severity  = us,
       Uplift_Premium   = uf * us,
@@ -820,14 +1004,53 @@ make_rating_table <- function(model_freq = NULL,
   out$IsThin <- ifelse(is.na(out$ClaimCount), NA, out$ClaimCount < min_claims)
 
   # Warn for thin categorical main-effect levels (thin tail bins are
-  # normal for continuous grids and would make the warning noisy)
-  n_thin <- sum(out$IsThin & is.na(out$Group) & out$Type == "categorical",
-                na.rm = TRUE)
+  # normal for continuous grids and would make the warning noisy). A level
+  # with exposure and no claims at all is worth its own words: its
+  # frequency factor is the fit running towards zero, not an estimate.
+  main_cat <- is.na(out$Group) & out$Type == "categorical"
+  n_thin <- sum(out$IsThin & main_cat, na.rm = TRUE)
+  zero   <- main_cat & out$ClaimCount == 0 & out$Exposure > 0
   if (n_thin > 0)
     warning("make_rating_table: ", n_thin, " categorical level(s) have ",
             "fewer than ", min_claims, " claims; the corresponding factors ",
-            "rest on very little experience (see the IsThin column).",
+            "rest on very little experience (see the IsThin and SE_ ",
+            "columns).",
+            if (any(zero))
+              paste0(" ", sum(zero), if (sum(zero) == 1) " of them has" else
+                       " of them have", " no claims at all (",
+                     paste(utils::head(paste0(out$Variable[zero], " = ",
+                                              out$Level[zero]), 5),
+                           collapse = ", "),
+                     "): their frequency factor is the fit running towards ",
+                     "zero, not an estimate; group them with a level that ",
+                     "has claims.") else "",
             call. = FALSE)
+
+  # [RT-10]
+  # Cells a model has no factor for: a level the model was not fitted on.
+  # Said once, naming the cells, because an NA in a tariff table is a value
+  # somebody has to supply by hand.
+  for (mm in list(list(m = model_freq, col = "Factor_Frequency",
+                       nm = "frequency"),
+                  list(m = model_sev,  col = "Factor_Severity",
+                       nm = "severity"))) {
+    if (is.null(mm$m)) next
+    i <- which(is.na(out[[mm$col]]))
+    if (!length(i)) next
+    cells <- unique(paste0(out$Variable[i], " = ", out$Level[i],
+                           ifelse(is.na(out$Group[i]), "",
+                                  paste0(" x ", out$Group[i]))))
+    warning("make_rating_table: no ", mm$nm, " factor for ",
+            paste(utils::head(cells, 5), collapse = ", "),
+            if (length(cells) > 5) paste0(" and ", length(cells) - 5, " more")
+            else "",
+            ": the ", mm$nm, " model was not fitted on that level",
+            if (mm$nm == "severity")
+              " (a level without claims leaves no severity data)" else "",
+            ", so ", mm$col, " and Factor_Premium are NA there. Group the ",
+            "level with one the model knows, or supply the factor yourself.",
+            call. = FALSE)
+  }
 
   # [OFF-06] [RT-01] [RT-03]
   # Intercepts (base values on the response scale, exposure = 1) ---------------

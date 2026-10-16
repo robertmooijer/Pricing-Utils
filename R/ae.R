@@ -143,6 +143,8 @@ plot_glm_predictor <- function(model, predictor,
 
   bin_type <- match.arg(bin_type)
   if (!inherits(model, "glm")) stop("'model' must be a glm object.")
+  # [DATA-06]
+  model <- .as_na_omit(model)
   if (!is.logical(ratio) || length(ratio) != 1 || is.na(ratio))
     stop("plot_glm_predictor: 'ratio' must be TRUE or FALSE.", call. = FALSE)
   if (n_bins < 2) stop("plot_glm_predictor: 'n_bins' must be at least 2.")

@@ -15,7 +15,8 @@ plot_glm_qq(
 }
 \arguments{
 \item{model}{A fitted glm object. Poisson, quasipoisson, binomial,
-Gamma and gaussian families are supported; for anything else the
+Gamma and gaussian families are supported, and the negative binomial
+of \code{MASS::glm.nb()} without prior weights; for anything else the
 function falls back to deviance residuals and says so.}
 
 \item{n_max}{Plot at most this many points, evenly spaced through the

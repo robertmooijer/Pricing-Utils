@@ -176,7 +176,8 @@ export_rating_table(tbl, "rating_table.xlsx")   # formatted Excel workbook
 
 impact <- premium_impact(dat,                    # dislocation vs current tariff
                          model_freq_new = m_freq, model_sev_new = m_sev,
-                         old_premium_col = "PREMIUM", by = "REGION")
+                         old_premium_col = "PREMIUM", by = "REGION",
+                         at = list(BOEKJAAR = max(dat$BOEKJAAR)))  # tariff year
 impact$summary; impact$plot
 
 pricing_report(m_freq, m_sev, dat,               # everything in one HTML
@@ -295,7 +296,8 @@ make_pdp(model, raw_data, pred_var,
          metric = c("Frequency", "Severity"),
          grid_res = 50, y_label = NULL, metric_fmt = 4,
          exposure_col = "Exposure", claims_col = "AantalClaims",
-         loss_col = "SCHADELAST", discrete_cutoff = 25, y_range = NULL)
+         loss_col = "SCHADELAST", discrete_cutoff = 25, y_range = NULL,
+         keep_offsets = TRUE)
 ```
 
 **What it does.** Take your whole portfolio and pretend, for a moment,
@@ -328,6 +330,14 @@ are tiny is the model extrapolating, not a real effect.
 Prices are always **per unit of exposure**, a full year, so a frequency of
 0.12 means 12 claims per 100 policy-years, whatever the actual policy
 durations are.
+
+A second offset, a bonus-malus scale carried as `offset(log(BM))`, stays in
+at each policy's own value, because the observed line is at each policy's
+own BM as well. Taking it out put the PDP at the class without discount: on
+a book with an average BM of 0.74 it ran 35% above the observed line at
+every level of a variable the model had exactly right. `keep_offsets =
+FALSE` takes it out anyway, and the y-axis title names the offsets that
+stayed in. The rating table is the place for factors at BM = 1.
 
 **Performance.** Policies that are identical on every *other* predictor
 get the same answer, so they are collapsed into one before predicting. That
@@ -379,7 +389,8 @@ The data needs the predictors, the response and any weight or offset
 column, since the plot holds the realised figure against the prediction.
 Rows with a missing value in a model variable are dropped, as `glm()`
 dropped them at fit time, and a factor level the model never saw is an
-error rather than a quietly missing row. Weights and offsets are
+error that names the column, the values and how many rows hold them,
+rather than a quietly missing row. Weights and offsets are
 re-evaluated on the new rows, so a severity model weighted by the claim
 count keeps weighting by that period's claim counts.
 
@@ -415,7 +426,7 @@ categorical term that is in the model, in-sample, it is a flat line at 1
 by construction.
 
 **More than one offset.** A model may carry a second, known relativity as
-an offset next to the exposure — a bonus-malus scale that is given rather
+an offset next to the exposure, a bonus-malus scale that is given rather
 than estimated:
 
 ```r
@@ -431,9 +442,9 @@ divide by the same thing. `make_pdp()` weights its average by the same
 column, so the two halves of that chart agree. With a single
 `offset(log(Exposure))` nothing changes: the two are the same number.
 
-The rating table handles the second offset the way you would want:
-`.model_rate()` removes **both**, so the intercept and factors are the
-base tariff *before* BM, and the premium chain becomes
+The rating table handles the second offset the way you would want: it
+removes **both**, so the intercept and factors are the base tariff
+*before* BM, and the premium chain becomes
 
 ```
 premie = intercept × Π factoren × BM × Exposure
@@ -459,8 +470,8 @@ categorical one outside the model.
 
 One case where the bars cannot be read as a test: for a **categorical term
 that is in the model** under a canonical link, observed equals predicted at
-every level by construction, so the bar always contains the predicted point
-— coverage is 1 by identity, not by fit. The bar length still tells you how
+every level by construction, so the bar always contains the predicted point,
+so coverage is 1 by identity, not by fit. The bar length still tells you how
 much evidence the level carries, but the absence of a gap there is
 arithmetic. That is the blind spot
 [`detect_interactions()`](#detect_interactions) exists to cover; see [why a
@@ -570,18 +581,21 @@ The fix is usually to drop one of the pair, or combine them into a single
 variable. Which one you keep is a business decision, not a statistical one;
 the model has no preference.
 
+**Terms in an interaction are reported, not flagged.** For an interaction,
+and for every main effect it contains, the GVIF depends on how the
+variables are coded rather than on the data. In a model with
+`pmin(LEEFTIJD, 30):STEDELIJKHEID`, writing the age part as
+`pmin(LEEFTIJD, 30) - 30` moved the scaled GVIF of `STEDELIJKHEID` from
+14.12 to 1.11, with identical predictions. Those terms get
+`InInteraction = TRUE` and `Flag = NA`, with a warning naming them; judge
+them on the stability of the combined effect instead.
+
 > The counterpart of the near-duplicate warning in
 > [`screen_features()`](#screen_features): that one catches correlated
 > *candidates* before they go in, while this one catches them once both are in.
 
 Why an ordinary VIF will not do here, and the generalised form used instead:
 [`glm_collinearity()` specification](#glm_collinearity-specification).
-
-![Collinearity table](man/figures/README-collinearity.png)
-
-> This is the model-level counterpart of the near-duplicate warning in
-> [`screen_features()`](#screen_features): that one catches correlated
-> *candidates* before they go in, while this one catches them once both are in.
 
 ### `plot_glm_residuals()`
 
@@ -590,7 +604,8 @@ are dominated by the 0/1 claim pattern on policy-level count data.
 
 ```r
 plot_glm_residuals(model, predictor = NULL, n_bins = 50,
-                   residual_type = c("pearson", "deviance"))
+                   residual_type = c("pearson", "deviance"),
+                   y_range = NULL)
 ```
 
 Residuals are averaged per quantile bin of the **fitted value** (default) or
@@ -605,6 +620,18 @@ The bin means are drawn as **points, not joined into a line**. They are
 independent draws, and a connecting line invites the eye to trace a trend
 through what is mostly noise; the band is what says whether a point means
 anything.
+
+**Deviance residuals are centred first.** A deviance residual is not zero
+on average under a correct model: a claim-free policy has `-sqrt(2 mu)`, so
+on a frequency model with small means the residuals are negative on
+average. On a correct Poisson book of 60,000 rows every one of 50 bins sat
+below the band (mean -0.220 against a band of 0.058). With
+`residual_type = "deviance"` each residual is therefore shown minus its
+expectation under the fitted model, and the band follows each bin's own
+variance; the axis says "centred". That is exact for the Poisson,
+quasi-Poisson, negative binomial, binomial, Gamma and Gaussian families;
+anything else is shown uncentred with a warning. Pearson residuals need
+none of this.
 
 **Returns** a plotly object.
 
@@ -667,6 +694,9 @@ classical residuals were built for continuous data. This function uses
 **quantile residuals** (Dunn & Smyth, 1996), which handle that correctly.
 The randomisation involved means two calls give slightly different pictures,
 pass `seed` if you need the same one twice.
+
+A negative binomial from `MASS::glm.nb()` gets quantile residuals as well,
+from its own CDF, as long as it carries no prior weights.
 
 Verified against `statmod::qresid()`, the reference implementation:
 identical for Poisson, equal to 6e-14 for Gamma. The mathematics, the
@@ -761,13 +791,27 @@ raked expected values under the additive null, `n_sim` times. Other families
 fall back to the dispersion-scaled chi-square (reported in the `Method`
 column).
 
+**Overdispersion is taken out first.** Claim counts nearly always vary more
+than a Poisson allows, and a Poisson null reads that extra variance as
+interaction: on ten books with a dispersion of 1.9 and no interaction at
+all, 33 of 60 pairs came out at `P < 0.05` where 3 would be expected. The
+deviance is therefore divided by the dispersion of a cell total,
+`sum((y - mu)^2) / sum(mu)`, and the simulation draws from a Poisson with
+the expected values divided by it. That is not the row-level dispersion of
+`glm_diagnostics()`: a cell total adds policies by their expected claims,
+so the policies with more expected claims weigh more in it (measured 1.91
+against 1.72). Over 100 books per case the false-positive rate is 3.3% at a
+dispersion of 1.94 and 6.7% on pure Poisson data, and a 16% uplift in one
+corner of a pair is found in 83% of the books on Poisson data and 48% at a
+dispersion of 2. The value used is in the `Dispersion` column.
+
 `vars` defaults to the model's own predictors, but you can pass variables
 that are *not* in the model, which is how a completely omitted rating factor
 surfaces.
 
 **Returns** a data.frame, strongest first: `VarX`, `VarY`, `Cells`,
-`Claims`, `Deviance`, `DF`, `Z`, `P`, `Method`, `MaxAE`, `MaxAE_Claims`,
-`MaxAE_ExposureShare`.
+`Claims`, `Deviance`, `DF`, `Z`, `P`, `Method`, `Dispersion`, `MaxAE`,
+`MaxAE_Claims`, `MaxAE_ExposureShare`.
 
 On the portfolio that is missing an age × region interaction, the true pair
 comes out at `Z = 33.9` against 1.6 for the runner-up, and its worst cell is
@@ -806,7 +850,8 @@ this model is spotless:
 - Cells with fewer than `min_claims` claims are **left blank and marked
   with a grey cross** rather than coloured: in a thin cell the A/E is
   mostly noise, and colouring it would make it the loudest thing on the
-  plot. Their volume is still in the tooltip.
+  plot. Their volume is still in the tooltip. When every cell is thin, on a
+  small book, the plot is the crosses alone, with a warning.
 - The cell table (groups, actual, expected, A/E, exposure, claims, thin
   flag) is attached to the returned plot as the `"cells"` attribute.
 
@@ -819,7 +864,10 @@ what the GLM leaves behind. Requires `xgboost` (in `Suggests`).
 screen_features(model, features = NULL, split = c(0.6, 0.2, 0.2),
                 max_depth = 2, eta = 0.05, nrounds = 2000,
                 early_stopping_rounds = 40, n_shap = 4000,
-                cor_threshold = 0.95, max_levels = 50, seed = NULL)
+                cor_threshold = 0.95, max_levels = 50, max_rows = Inf,
+                tree_method = "hist", nthread = NULL, seed = NULL,
+                exposure_col = "Exposure", claims_col = "AantalClaims",
+                loss_col = "SCHADELAST")
 ```
 
 The baseline you pass decides which question it answers. With a **minimal
@@ -847,6 +895,14 @@ $features
           RUIS   FALSE        -3.57 0.1351
 ```
 
+The candidates are every usable column of the model's data except the
+response, the offset, the prior weights and the outcome columns
+`claims_col`, `loss_col` and `exposure_col`; a message names the ones left
+out. That matters: offered the loss amount, the booster on a frequency
+model finds that claims follow losses, ranks it first with 97% of the
+gain, and the verdict is then about leakage rather than risk. A column you
+name in `features` yourself stays, with a warning if it is one of those.
+
 Three things to read carefully:
 
 - **The verdict is staged.** While the depth-1 step still improves the
@@ -860,7 +916,7 @@ Three things to read carefully:
   correctly puts it at −3.57.
 - **It is a ranking, not a test.** Zero is not a threshold. The figure is
   a difference between two deviances on one random split, so it carries
-  sampling noise, and its scale depends on how large that split is — a
+  sampling noise, and its scale depends on how large that split is, so a
   value of 5 means nothing on its own. Measured on a 150,000-row book over
   three seeds, pure noise columns ranged from −3.8 to +2.3 while a genuine
   but weak predictor ranged from −1.9 to +2.0. The strong features were
@@ -876,7 +932,7 @@ Three things to read carefully:
 
 Also returns `$interactions` (SHAP ranking), `$stats` and `$plot`. The plot
 ranks candidates by incremental value and mutes everything at or below
-zero — a useful visual cue, not a verdict:
+zero, a useful visual cue, not a verdict:
 
 ![Feature screening](man/figures/README-screen-features.png)
 
@@ -919,6 +975,13 @@ level of each categorical variable (or the largest by exposure, with
 `base_level = "exposure"`) and the median of each continuous one. It is a
 reference point, not a recommendation, moving it changes every factor and
 the base premium together, and leaves all quoted prices identical.
+
+The accounting year is the exception: when a model uses `year_col`
+(default `BOEKJAAR`), its base is the **latest** year, so the base premium
+is today's price level and the year factors say how much cheaper earlier
+years were. With the first year as base, the base premium is the price
+level of the oldest year in the data. `base` still overrides it, and
+`year_col = NULL` puts the year back under the general rule.
 
 To pick the base yourself, name it per variable with `base`. The model is
 not refitted; only the factors and the base premium move:
@@ -1282,7 +1345,8 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
                   base_level = c("first", "exposure"),
                   trim = c(0, 1),
                   min_claims = 30, grid_step = NULL, base = NULL,
-                  merge_vars = NULL)
+                  merge_vars = NULL, year_col = "BOEKJAAR",
+                  loss_col = "SCHADELAST")
 ```
 
 | Argument | Description |
@@ -1296,6 +1360,8 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
 | `min_claims` | thin-cell threshold: levels with fewer claims get `IsThin = TRUE` (categorical thin levels also raise a warning) |
 | `base` | your own base per variable, e.g. `list(REGIO = "Zuid", LEEFTIJD = 40)`; `NULL` keeps the default base |
 | `merge_vars` | two columns that are one rating factor, e.g. `list(Stedelijkheid = "Stedelijkheid_groep")`; the regrouped column may live in the model's own data rather than in `data`; see [One rating factor, two columns](#one-rating-factor-two-columns) |
+| `year_col` | the accounting-year column, whose default base is the latest year; `NULL` treats it like any other variable |
+| `loss_col` | the loss amount, read only to warn when claims without payment make frequency x severity too high |
 
 **Returns** a data.frame with one row per level/grid point per variable:
 
@@ -1307,8 +1373,9 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
 | `Group`, `GroupVar`, `XVar` | interaction bookkeeping (`NA` for main effects) |
 | `IsBase` | `TRUE` on the base row/cell (factor exactly 1) |
 | `Exposure`, `ClaimCount` | data volume per level, and per cell for interactions, a continuous variable is binned onto its own grid first, so the cells are filled whatever the two types are |
-| `Factor_Frequency`, `Factor_Severity`, `Factor_Premium` | the multipliers themselves, how many times the base. `Premium = Frequency × Severity`. A variable that is in only one of the two models gets 1.00 in the other |
+| `Factor_Frequency`, `Factor_Severity`, `Factor_Premium` | the multipliers themselves, how many times the base. `Premium = Frequency × Severity`. A variable that is in only one of the two models gets 1.00 in the other. A level the model was not fitted on, such as a level without claims that the severity model never saw, gets `NA` in that model's column and in `Factor_Premium`, with a warning |
 | `Uplift_Frequency`, `Uplift_Severity`, `Uplift_Premium` | interaction rows only, the part the two main effects do **not** already explain. See below. **Absent altogether when the model carries no interaction term**, since they would then be `NA` in every row |
+| `SE_Frequency`, `SE_Severity` | standard error of the **logarithm** of the factor, from the model's own covariance matrix: `exp(log(Factor) ± 1.96 SE)` is a 95% interval. 0 on the base row and for a variable the model does not use; on an interaction row it belongs to the joint factor. See [Thin cells](#thin-cells) |
 | `IsThin` | `TRUE` when `ClaimCount < min_claims`: this factor rests on very few claims and is correspondingly unstable. Dimmed in `make_rating_plot()`, greyed out in the Excel export, see [Thin cells](#thin-cells) |
 
 #### Factor vs Uplift on an interaction row
@@ -1331,8 +1398,9 @@ in the city added together.
 
 Read them for different purposes:
 
-- **`Factor_*`** is what you put in the tariff. It already contains
-  everything.
+- **`Factor_*`** is the price of the combination. It already contains
+  both main effects, so it *replaces* the two main-effect factors of that
+  pair.
 - **`Uplift_*`** is what you look at to decide whether the interaction is
   worth having at all. It is exactly `exp(β)` of the interaction
   coefficient: the fitted interaction on its own, with both main effects
@@ -1349,8 +1417,14 @@ exactly 1.00 *by construction*, not by evidence. On a 3 × 2 interaction
 that is four of the six cells; only two carry an estimated coefficient. So
 "they are all 1.00" only means something once those are set aside.
 
-Never multiply the uplift onto the main effects yourself: that would
-double-count, because `Factor` already includes it.
+**Building a premium: one of the two, never both.** Either take the joint
+`Factor` *instead of* the two main effects of that pair (1.85), or take the
+two main effects and the `Uplift` *on top* (1.40 × 1.20 × 1.10 = 1.85); both
+give the model's prediction exactly. What you must not do is multiply the
+joint `Factor` onto the two main effects: that counts them twice, and on a
+real tariff it put premiums 16% too high on average and up to 3.4 times.
+The Tariff sheet of the [Excel export](#export_rating_table) uses the second
+form, which is why its interaction keys hold the uplift.
 
 #### Readable grids for continuous variables
 
@@ -1413,7 +1487,9 @@ summed from a different column, and the function warns.
 **Rows outside the grid.** With `trim`, policies beyond the trimmed range
 are excluded from the exposure histogram rather than swept into the outer
 bins. The exposure shown therefore adds up to less than the portfolio total,
-by design, since the grid does not cover those policies.
+by design, since the grid does not cover those policies. The three slices of
+a continuous group variable in an interaction are not trimmed: they stand
+for the whole distribution, so their cells add up to the full exposure.
 
 Attributes on the returned table:
 
@@ -1423,7 +1499,9 @@ Attributes on the returned table:
 
 Inline formula transformations such as `factor(YEAR)` and `ns(AGE, 4)` are
 resolved to their underlying columns; terms whose base variable cannot be
-found in `data` are skipped with a warning rather than crashing the call.
+found in `data` are skipped with a warning rather than crashing the call. A
+term that bands a column, such as `cut(LEEFTIJD, c(17, 24, 40, 65, 99))`,
+is reported on its bands, and a logical column on `TRUE` and `FALSE`.
 
 The rows for one categorical variable look like this (base row highlighted,
 thin row greyed out, as in the Excel export). Note the last level: 5 claims
@@ -1574,7 +1652,8 @@ expensive ones?*
 model_lift(model_freq = NULL, model_sev = NULL, data = NULL,
            actual_col = "SCHADELAST", exposure_col = "Exposure",
            claims_col = "AantalClaims", weight_col = NULL,
-           n_bins = 10, y_range = NULL, keep_offsets = TRUE)
+           n_bins = 10, y_range = NULL, keep_offsets = TRUE,
+           n_boot = 200, conf_level = 0.90, seed = NULL, at = NULL)
 ```
 
 **What it does.** Every other diagnostic here looks at one variable. This
@@ -1626,6 +1705,18 @@ diagonal, the more the model separates:
 
 ![Lorenz curve](man/figures/README-lorenz.png)
 
+**How sure is that number?** Less than it looks. A Gini on raw losses
+moves with a handful of large claims: on a 16,000-policy holdout the 90%
+interval ran from 0.14 to 0.33 around 0.23, wider than any difference you
+would want to choose two models on, and the true risk premium scored 0.13
+to 0.30 on the same book. So the Gini comes with a bootstrap interval, in
+the chart title and in `$gini_ci` (`n_boot = 200` replicates, `conf_level =
+0.90`, `seed` for the same interval twice, `n_boot = 0` to switch it off).
+When the interval is wide **and** the ten largest records carry 10% or
+more of the losses, a warning says so: cap the large losses in
+`actual_col`, and compare models on the same capped losses. A wide
+interval on a small book has no such remedy and is left to the title.
+
 > **Match the units.** Claim counts with a frequency model, loss amounts
 > with a severity or risk premium model. If the overall A/E lands far from
 > 1 the function warns, because that nearly always means `actual_col` and
@@ -1645,8 +1736,10 @@ double_lift(data, model_freq_new = NULL, model_sev_new = NULL,
             old_premium_col = NULL,
             old_premium_basis = c("amount", "rate"),
             actual_col = "SCHADELAST", exposure_col = "Exposure",
+            claims_col = "AantalClaims", weight_col = NULL,
             n_bins = 10, rebase = TRUE, y_range = NULL,
-            keep_offsets = TRUE)
+            keep_offsets = TRUE, n_boot = 200, conf_level = 0.90,
+            seed = NULL, at = NULL)
 ```
 
 **The question it answers:** *my new tariff and my old one disagree about
@@ -1693,11 +1786,29 @@ And in `$stats`:
 | Value | What it tells you |
 |---|---|
 | `mad_new`, `mad_old` | average distance from 1.0 across the slices, lower is better calibrated |
-| `winner` | `"new"`, `"old"` or `"tie"`, from those two |
+| `mad_diff`, `mad_diff_ci` | `mad_old - mad_new`, positive when the new tariff is closer to 1, and its bootstrap interval |
+| `winner` | `"new"` or `"old"` only when that interval excludes 0; `"inconclusive"` when it does not; `"tie"` when the two are equal |
 | `rate_level_change` | how much more the new tariff collects overall, measured before any rebasing |
+| `weight_col` | what the slices hold equal amounts of |
 
-Treat `winner` as a headline, not a verdict: it is an average of the
-picture, and *where* a tariff drifts matters as much as how far.
+**A winner only when the data says so.** The two averages are decided by a
+few large claims. On a 16,000-policy holdout the point values said "old" on
+the losses as recorded (0.543 against 0.405) and "new" on the same losses
+capped at 50,000 (0.222 against 0.271). So the difference gets a bootstrap
+interval (`n_boot`, `conf_level`, `seed`, as in `model_lift()`), and
+`winner` is `"inconclusive"` unless that interval excludes 0; the chart
+title shows the interval. When large losses are behind an inconclusive
+verdict, the ten largest records carrying 10% or more, a warning says so.
+`n_boot = 0` goes back to the point values alone. Even with a winner, it is
+a summary of the picture: *where* a tariff drifts matters as much as how
+far.
+
+**The weight follows the models**, as in `model_lift()`: two severity
+models are compared per claim (`claims_col`), everything else per unit of
+exposure, and an old premium amount is divided by that same weight. A
+severity model on one side and a frequency or risk premium on the other is
+refused, because the ratio of a rate per claim to a rate per year orders
+the book by neither tariff.
 
 **Rate level is taken out by default** (`rebase = TRUE`), so both sides
 collect the same total premium and the chart is purely about
@@ -1712,8 +1823,10 @@ double_lift(data, model_freq_new = NULL, model_sev_new = NULL,
             old_premium_col = NULL,
             old_premium_basis = c("amount", "rate"),
             actual_col = "SCHADELAST", exposure_col = "Exposure",
+            claims_col = "AantalClaims", weight_col = NULL,
             n_bins = 10, rebase = TRUE, y_range = NULL,
-            keep_offsets = TRUE)
+            keep_offsets = TRUE, n_boot = 200, conf_level = 0.90,
+            seed = NULL, at = NULL)
 ```
 
 Same arguments as [`premium_impact()`](#premium_impact): either two model
@@ -1732,7 +1845,8 @@ premium_impact(data,
                old_premium_basis = c("amount", "rate"),
                rebase = TRUE, by = NULL, n_show = 10,
                exposure_col = "Exposure", spotlight = NULL,
-               x_range = NULL, y_range = NULL, keep_offsets = TRUE)
+               x_range = NULL, y_range = NULL, keep_offsets = TRUE,
+               at = NULL, year_col = "BOEKJAAR")
 ```
 
 Premiums are computed as **rates per unit of exposure**: the exposure offset
@@ -1783,20 +1897,52 @@ out: a model whose offset is not on `exposure_col` at all, and one
 expression that holds both, `offset(log(Exposure * BM))`, which cannot be
 split and is reported in a warning; write it as two terms to keep the BM.
 
+**The accounting year.** With `BOEKJAAR` as a rating factor, every policy is
+priced at the level of its own historic year. Against a current premium
+that mixes several years of inflation into the dislocation: on the review's
+book the rate-level change was +11.1% that way and +34.7% with every policy
+at 2024. Pass `at` to price every policy at one year:
+
+```r
+premium_impact(dat, model_freq_new = m_freq, model_sev_new = m_sev,
+               old_premium_col = "PREMIE_OUD", at = list(BOEKJAAR = 2024))
+```
+
+`at` changes what the models score, never the old premium column. Without
+it, a warning points this out when the new models use `year_col` against a
+premium column, or when only one of two model sets uses it; two model sets
+that both use it price each policy at the same year on both sides, which is
+like for like.
+
+**What the models cannot price is named.** A level or a year the model was
+not fitted on stops the function with the column, the values and the
+number of rows, rather than an error about the offset. Map those values to
+a level the model knows, leave the rows out, or for a later year use `at`.
+A numeric value outside the fitted range is priced, with a warning, because
+a spline extrapolates there without a word.
+
 **Returns** a list: `summary` (display table), `stats` (the same numbers as
 a named list), `policy` (per-row old/new/percent change), `by_level`
-(exposure-weighted mean change per level of the `by` columns),
+(per level of the `by` columns: exposure and premium, mean and total
+change, contribution),
 `largest_increases`/`largest_decreases` (top-`n_show` dislocations) and
 `plot` (exposure-weighted histogram of premium changes with the median
 marked).
 
 ![Premium impact histogram](man/figures/README-premium-impact.png)
 
-**Who drives the change.** With `by`, each level gets `ExposureShare`,
-`MeanChangePct` and `Contribution = share × change`. The contributions of
-one variable's levels **sum to the portfolio change**, which answers the
-question a pricing committee actually asks: not "how much does this segment
-move" but "how much of our +10.5% comes from it".
+**Who drives the change.** With `by`, each level gets `MeanChangePct` (what
+a policy in that level sees on average), `OldPremium`, `NewPremium`,
+`PremiumShare` (its share of the old premium), `TotalChangePct` (the
+change of its total premium) and `Contribution = PremiumShare ×
+TotalChangePct`. The contributions of one variable's levels **sum to the
+change in the total premium**, exactly, which answers the question a
+pricing committee actually asks: not "how much does this segment move" but
+"how much of our +10.5% comes from it". After a rebase they sum to 0. A
+share of exposure times a mean percentage does not add up that way, because
+a percentage on a cheap policy moves less money than the same percentage on
+an expensive one; on the review's book it summed to -4.0% for a total
+change of 0.0%.
 
 **Spotlighting a subset.** `spotlight` takes an expression evaluated
 against `data`, or a logical vector:
@@ -1840,7 +1986,8 @@ export_rating_table(rating_tbl, file = "rating_table.xlsx",
 The workbook contains:
 
 - **Overview**, timestamp, the intercepts (per unit of exposure) and the
-  base value per variable;
+  base value per variable, written as numbers so a formula can refer to
+  them;
 - **Tariff**, every factor of every variable under one another with a
   single `Key` column (`Variable|Level`, plus the group for interaction
   rows), so a premium can be assembled with `VLOOKUP` instead of hopping
@@ -1852,7 +1999,13 @@ The workbook contains:
 
   Multiply the intercept from Overview by one factor per variable and you
   have the risk premium per unit of exposure, verified to reproduce the
-  model prediction to machine precision;
+  model prediction to machine precision. With an interaction, multiply by
+  its key `Variable|Level|Group` as well: on this sheet that key holds the
+  **uplift**, the part the two main effects do not already explain, so
+  nothing is counted twice (the interaction sheets keep the joint factor).
+  Before this was so, rebuilding a premium by the instruction came out 16%
+  too high on average and up to 3.4 times. A bonus-malus discount is not a
+  factor here and is applied on top;
 - **one sheet per main-effect variable**, level, exposure, claim count
   and the factor columns; the base row is highlighted, thin rows are
   greyed out. Continuous levels are written as **numbers**, so Excel does
@@ -1880,8 +2033,12 @@ pricing_report(model_freq = NULL, model_sev = NULL, data,
                variables = NULL,
                include = c("diagnostics", "oneway", "ae", "pdp", "rating",
                            "interactions"),
-               by_year = FALSE, top_interactions = 3, grid_res = 50,
-               base_level = c("first", "exposure"), trim = c(0, 1), ...)
+               by_year = FALSE, top_interactions = 3,
+               exposure_col = "Exposure", claims_col = "AantalClaims",
+               loss_col = "SCHADELAST", year_col = "BOEKJAAR",
+               grid_res = 50, base_level = c("first", "exposure"),
+               trim = c(0, 1), merge_vars = NULL, base = NULL,
+               grid_step = NULL)
 ```
 
 The report contains the diagnostics table with binned residual plots, and,
@@ -1891,7 +2048,9 @@ dependence and the rating-factor plot, plus a section with all interaction
 plots. The `"interactions"` block additionally runs
 [`detect_interactions()`](#detect_interactions) and plots the strongest
 `top_interactions` pairs as A/E heatmaps. Individual plot failures are shown
-as a note instead of aborting the report.
+as a note instead of aborting the report. `merge_vars`, `base` and
+`grid_step` go to the rating table, so the report shows the same tariff as
+a table built with them.
 
 It is built with `htmltools` (no pandoc needed); all plots remain fully
 interactive. Next to the `.html` a `<name>_files/` folder is written with
@@ -1922,21 +2081,21 @@ exposure or prior weight, `a` and `e` actual and expected claims in a cell.
 | [`agg_all()`](#agg_all) | frequency and severity per level | `Σclaims / Σexposure` and `Σloss / Σclaims` | none |
 | [`make_plot()`](#make_plot) | the observed one-way | as above, per level of one variable | none |
 | [`plot_glm_predictor()`](#plot_glm_predictor) | actual vs expected per bin | counts: `Σy/Σw` against `Σμ/Σw`; weighted models: prior-weight-weighted means | log link, to recover exposure as `exp(offset)` |
-| [`make_pdp()`](#make_pdp) | the partial effect on the response scale | weighted mean of `predict(type = "response")` per grid point, offset subtracted on the link scale → [why](#why-the-pdp-is-computed-on-the-response-scale) | offset read from the model → [how](#deriving-the-offset-and-the-link) |
+| [`make_pdp()`](#make_pdp) | the partial effect on the response scale | weighted mean of `predict(type = "response")` per grid point, exposure offset subtracted on the link scale, any other offset kept → [why](#why-the-pdp-is-computed-on-the-response-scale) | offset read from the model → [how](#deriving-the-offset-and-the-link) |
 | [`glm_diagnostics()`](#glm_diagnostics) | fit and dispersion | Pearson `χ²/df`; `1 − D/D₀` | → [overdispersion](#overdispersion) |
-| [`glm_collinearity()`](#glm_collinearity) | how far each term is explained by the others | generalised VIF, `GVIF^(1/(2·DF))` | terms, not coefficients |
-| [`model_lift()`](#model_lift) | risk separation across the book | `Σactual/Σw` against `Σpred/Σw` per equal-exposure bin; Gini on the Lorenz curve | → [what lift measures](#what-lift-and-gini-do-and-do-not-measure) |
-| [`double_lift()`](#double_lift) | which of two tariffs is right where they differ | A/E of each model per bin of the rate ratio `new/old` | rebased to equal totals |
-| [`plot_glm_residuals()`](#plot_glm_residuals) | binned residuals | mean residual per bin, band `±2·√(φ/n)` | the dispersion estimate `φ` |
+| [`glm_collinearity()`](#glm_collinearity) | how far each term is explained by the others | generalised VIF, `GVIF^(1/(2·DF))`; terms in an interaction reported, not flagged | terms, not coefficients |
+| [`model_lift()`](#model_lift) | risk separation across the book | `Σactual/Σw` against `Σpred/Σw` per equal-exposure bin; Gini on the Lorenz curve, with a bootstrap interval | → [what lift measures](#what-lift-and-gini-do-and-do-not-measure) |
+| [`double_lift()`](#double_lift) | which of two tariffs is right where they differ | A/E of each model per bin of the rate ratio `new/old`; a winner only when the interval of `mad_old − mad_new` excludes 0 | rebased to equal totals |
+| [`plot_glm_residuals()`](#plot_glm_residuals) | binned residuals | mean residual per bin, band `±2·√(Σvar)/n`; deviance residuals centred on their expectation | the fitted family and `φ` |
 | [`plot_glm_qq()`](#plot_glm_qq) | does the response match the family | randomised quantile residual `Φ⁻¹(U(F(y⁻), F(y)))` → [why not the classical residuals](#reading-a-q-q-plot-of-quantile-residuals) | a closed-form CDF for the family |
 | [`plot_glm_influence()`](#plot_glm_influence) | which rows move the fit | leverage vs standardised residual, sized by Cook's `D` | → [on a large book](#cooks-distance-on-a-large-book) |
-| [`detect_interactions()`](#detect_interactions) | interaction structure the GLM missed | `D = 2·Σ[a·log(a/e*) − (a − e*)]`, where `e*` is `e` raked to `a`'s margins; null by simulation → [why](#why-a-one-way-check-cannot-see-an-interaction) | Poisson counts (otherwise `χ²` scaled by `φ`) |
+| [`detect_interactions()`](#detect_interactions) | interaction structure the GLM missed | `D = 2·Σ[a·log(a/e*) − (a − e*)]`, where `e*` is `e` raked to `a`'s margins; null by simulation, scaled by the cell-total dispersion → [why](#why-a-one-way-check-cannot-see-an-interaction) | Poisson counts (otherwise `χ²` scaled by `φ`) |
 | [`plot_residual_heatmap()`](#plot_residual_heatmap) | A/E per cell | `Σa / Σe` per cell of two variables | none |
 | [`screen_features()`](#screen_features) | incremental value of a candidate | increase in out-of-sample deviance when the feature is shuffled, baseline margin held fixed | a holdout split; log link |
-| [`make_rating_table()`](#make_rating_table) | multiplicative relativities | `pred(level, rest at base) / pred(base)`; interaction uplift `joint / (mainₓ · main_g)` → [why](#multiplicative-rating-and-the-reconstruction-identity) | log link |
+| [`make_rating_table()`](#make_rating_table) | multiplicative relativities | `pred(level, rest at base) / pred(base)`; interaction uplift `joint / (mainₓ · main_g)`; standard error `√(dᵀVd)` of each log factor → [why](#multiplicative-rating-and-the-reconstruction-identity) | log link |
 | [`add_groupings()`](#add_groupings) | the grouped columns a model was fitted on, for new data | the source-to-group relation in the model's own data, exact for a categorical source, nearest value for a band | the model was fitted with `data =` |
 | [`make_rating_plot()`](#make_rating_plot) | those relativities, plotted | none | → [thin cells](#thin-cells) |
-| [`premium_impact()`](#premium_impact) | dislocation against the current tariff | `new/old − 1` per policy, optionally rebased so the totals match | log link, to price at exposure = 1 |
+| [`premium_impact()`](#premium_impact) | dislocation against the current tariff | `new/old − 1` per policy, optionally rebased so the totals match; contribution `(new − old) / old total` per level | log link, to price at exposure = 1 |
 | [`export_rating_table()`](#export_rating_table) / [`pricing_report()`](#pricing_report) | deliverables | none | none |
 
 Two assumptions run through almost the whole table and are worth stating
@@ -1954,6 +2113,7 @@ For log-link GLMs the prediction factorises multiplicatively. The rating
 table exploits this with a single consistent **base point**:
 
 - categorical variables → reference level (`base_level`), unless set in `base`,
+- the accounting year (`year_col`) → its **latest** year, unless set in `base`,
 - continuous variables → the **median** (inserted as an explicit grid point), unless set in `base`,
 - the exposure column → **1**.
 
@@ -1968,7 +2128,9 @@ prediction(x₁, …, xₖ, exposure = 1)
 
 (verified to 1e-10 in the test suite). With interactions, the joint
 relativity of a pair decomposes as `main_x × main_group × Uplift`, so the
-uplift columns isolate what the interaction adds on top of the main effects.
+uplift columns isolate what the interaction adds on top of the main effects,
+and the identity holds with either the joint factor in place of the pair's
+two main effects or the uplift on top of them.
 
 Because the intercept is evaluated at exposure = 1, it is a true base
 frequency (respectively base severity / base risk premium) per unit of
@@ -2091,6 +2253,20 @@ about it (grouping the level with a related one, capping the factor, or
 leaving it out of the tariff) stays a judgement call; the package only flags
 it.
 
+A claim count is a proxy, though, and the threshold of 30 is a convention.
+The precision itself is in `SE_Frequency` and `SE_Severity`, the standard
+error of each factor's logarithm from the model's covariance matrix. On the
+review's book a fuel type with 31 claims passed the flag, with an estimated
+factor of 1.17 against a true 1.00 and a standard error of 0.18: a 95%
+interval of x0.70 to x1.42 around the factor, which says far more than
+`IsThin = FALSE`. A Poisson model's covariance assumes a dispersion of 1,
+so on overdispersed counts fit a quasi-Poisson for honest standard errors.
+
+A level with exposure and **no claims at all** is a case of its own. The
+frequency factor is then the fit running towards zero, and the warning
+says so; the severity model has never seen the level, so its factor is
+`NA` in the table rather than the whole variable disappearing from it.
+
 ### What lift and Gini do and do not measure
 
 A Gini measures **ordering**, nothing else. It asks whether the policies the
@@ -2117,6 +2293,12 @@ by default: without that, a candidate that is simply 10% cheaper everywhere
 would look systematically better, when the comparison is about
 differentiation rather than rate level.
 
+And a third: both numbers are noisy on raw losses. A few large claims move
+the Gini and decide the double-lift verdict, so both come with a bootstrap
+interval, and the double lift names a winner only when its interval
+excludes 0. The bootstrap resamples policies with the models held fixed,
+so on the training data it is too narrow as well.
+
 ### Collinearity
 
 Collinearity does not damage predictions; it damages **interpretation**. A
@@ -2141,6 +2323,14 @@ standard errors scale with √dispersion, so term selection based on naive
 Poisson p-values is anti-conservative. Refit with `quasipoisson()` or a
 negative binomial family when flagged.
 
+The same extra variance would read as interaction in
+[`detect_interactions()`](#detect_interactions), whose null is a Poisson
+simulation, so the scan divides it out first. It uses the dispersion of a
+cell total, `Σ(y − μ)² / Σμ`, rather than the row-level Pearson one: a
+cell total adds policies by their expected claims, and under unobserved
+heterogeneity the policies with more expected claims carry more of the
+extra variance.
+
 ### Deriving the offset and the link
 
 Everything needed is on the fitted model, so nothing is assumed. The link
@@ -2161,15 +2351,16 @@ subtracts either the whole offset or only its exposure part:
 
 | Function | Offset taken out | So the number is | Why |
 |---|---|---|---|
-| `make_rating_table()` (intercept), `make_pdp()` | **all** of it | per unit of exposure, at BM = 1 | a tariff table describes a base policy; the discount is applied on top, per policy |
-| `premium_impact()`, `model_lift()`, `double_lift()` | **only the exposure** (default `keep_offsets = TRUE`) | per unit of exposure, at the policy's own BM | they compare with something that includes the discount: the premium a customer pays, the claims that actually happened |
+| `make_rating_table()` (intercept) | **all** of it | per unit of exposure, at BM = 1 | a tariff table describes a base policy; the discount is applied on top, per policy |
+| `premium_impact()`, `model_lift()`, `double_lift()`, `make_pdp()` | **only the exposure** (default `keep_offsets = TRUE`) | per unit of exposure, at the policy's own BM | they compare with something that includes the discount: the premium a customer pays, the claims that actually happened, the observed line next to the PDP |
 
 The second row is $g^{-1}(\hat\eta - \text{offset}_{\text{exposure}})$: only
 the offset terms that mention `exposure_col` are subtracted. Taking the BM
 out there as well put every policy at the class without discount, and a
 correct model with an in-sample A/E of exactly 1.000 then read 0.800 on a
-book with an average discount of 20%. `keep_offsets = FALSE` restores
-taking everything out. Two cases fall back to it automatically: a model
+book with an average discount of 20%, and a PDP at BM = 1 ran 35% above
+its own observed line on a book with an average BM of 0.74.
+`keep_offsets = FALSE` restores taking everything out. Two cases fall back to it automatically: a model
 whose offset is not on `exposure_col` at all, and one expression holding
 both, `offset(log(Exposure * BM))`, which cannot be split and says so in a
 warning.
@@ -2371,8 +2562,14 @@ The functions fail fast with explicit messages rather than producing
 silently wrong numbers:
 
 - **Errors**: missing columns (named per function), non-glm model objects,
-  models fitted without `data =` where training data is needed, unknown
-  `weight_var`, unmatched predictors, invalid `trim`.
+  models fitted without `data =` where training data is needed and cannot
+  be found through the call, unknown `weight_var`, unmatched predictors,
+  invalid `trim`; a level or year a model was not fitted on, named with
+  its column, values and row count (`premium_impact`, `model_lift`,
+  `double_lift`, `plot_glm_predictor` on new data); a rating-table base
+  row a model does not know; an `at` value that is not valid for its
+  column; a severity model compared with a frequency or risk premium in
+  `double_lift`; invalid `n_boot` or `conf_level`.
 - **Warnings**:
   - `NA`s in exposure/claims/loss inputs and groups with exposure ≤ 0
     (`agg_all`);
@@ -2383,8 +2580,27 @@ silently wrong numbers:
   - unweighted PDP averaging when no offset/weights are found;
   - skipped rating-table terms/interactions, with the reason;
   - overdispersion in Poisson/binomial models (`glm_diagnostics`);
-  - categorical rating-table levels with fewer than `min_claims` claims
-    (`make_rating_table`).
+  - categorical rating-table levels with fewer than `min_claims` claims,
+    naming the ones without any claim (`make_rating_table`);
+  - rating-table cells a model has no factor for, left `NA`
+    (`make_rating_table`);
+  - claims without payment, which make frequency x severity too high
+    (`make_rating_table`, `model_lift`);
+  - numeric values outside the fitted range when scoring
+    (`premium_impact`, `model_lift`, `double_lift`);
+  - the accounting year priced per policy against a current premium
+    (`premium_impact`, switched off by `at` or `year_col = NULL`);
+  - a wide Gini interval or an inconclusive double lift when large losses
+    are behind it (`model_lift`, `double_lift`);
+  - rows dropped, counted per reason (`premium_impact`, `model_lift`,
+    `double_lift`);
+  - terms in an interaction, whose GVIF is not flagged
+    (`glm_collinearity`);
+  - a heatmap in which every cell is thin (`plot_residual_heatmap`);
+  - an outcome or volume column named as a screening candidate
+    (`screen_features`);
+  - deviance residuals that cannot be centred for the family
+    (`plot_glm_residuals`).
 
 ## Tests
 
@@ -2400,7 +2616,12 @@ flag, zero dislocation for identical models and exact rebase behaviour in
 report. For the interaction tools it simulates a portfolio with a *known*
 missing interaction and checks that `detect_interactions()` ranks the true
 pair first, and that a portfolio without any interaction produces no signal.
-Run it with:
+`test-review-findings.R` holds the regression tests of an external review,
+each describing behaviour that was wrong before: a variable lost over one
+level without claims, `cut()` in a formula, `na.exclude`, the Tariff sheet
+with an interaction, contributions that did not add up, the PDP with a BM
+offset, overdispersion read as interaction, deviance residuals outside the
+band, the loss amount as a screening candidate, and more. Run it with:
 
 ```r
 devtools::test()        # or:
@@ -2436,8 +2657,8 @@ Chain: 411.91   predict(): 411.91   difference: 4.55e-13
 ```
 
 Note where BM sits: the rating table gives the tariff **before** the
-discount, because `.model_rate()` removes both offsets, and the ladder is
-applied afterwards — which is how you would publish it anyway.
+discount, because it removes both offsets, and the ladder is applied
+afterwards, which is how you would publish it anyway.
 
 It then shows the diagnostic that a second offset makes possible. BM
 carries no estimated parameter, so its A/E is **not** pinned to 1 the way a
@@ -2477,8 +2698,10 @@ Rscript demo/make_readme_figures.R
 
 Deliberately out of scope (for now):
 
-- **No uncertainty quantification**, the rating factors carry no standard
-  errors or confidence intervals.
+- **Uncertainty only in places**: the rating factors carry standard errors
+  (`SE_Frequency`, `SE_Severity`) and the Gini and the double-lift verdict a
+  bootstrap interval, but premiums and PDPs have no interval, and the
+  bootstrap holds the fitted models fixed.
 - **In-sample by default**, every diagnostic evaluates on the model's own
   rows unless told otherwise. Two functions do more:
   [`model_lift()`](#model_lift) and [`double_lift()`](#double_lift) take a
@@ -2641,7 +2864,8 @@ overlaid with the observed one-way statistic.
 make_pdp(model, raw_data, pred_var, metric = c("Frequency", "Severity"),
          transform = NULL, grid_res = 50, y_label = NULL, metric_fmt = 4,
          exposure_col = "Exposure", claims_col = "AantalClaims",
-         loss_col = "SCHADELAST", discrete_cutoff = 25, y_range = NULL)
+         loss_col = "SCHADELAST", discrete_cutoff = 25, y_range = NULL,
+         keep_offsets = TRUE)
 ```
 
 | Argument | Type | Default | Meaning |
@@ -2654,16 +2878,21 @@ make_pdp(model, raw_data, pred_var, metric = c("Frequency", "Severity"),
 | `grid_res` | integer | `50` | grid points for a continuous predictor |
 | `y_label`, `metric_fmt` | | `NULL`, `4` | axis label (auto) and tooltip decimals |
 | `y_range` | numeric(2) or NULL | `NULL` | fix the primary axis |
+| `keep_offsets` | logical(1) | `TRUE` | take only the exposure offset out and keep any other, such as a BM scale, at each policy's own value; `FALSE` takes every offset out |
 
 **Algorithm.**
 
 1. Aggregate `raw_data` to the observed line: frequency
    `Σclaims / Σexposure` per level, or severity `Σloss / Σclaims` over
    rows with claims.
-2. Recover the training data and the averaging weights: `exp(offset)` for
-   frequency, prior weights for severity.
-3. **Neutralise the offset** by setting the exposure column to 1, so
-   predictions are per unit of exposure.
+2. Recover the training data and the averaging weights: `exposure_col`
+   (falling back to `exp(offset)`) for frequency, prior weights for
+   severity.
+3. **Take out the exposure offset.** Its variables are pinned to 1 so the
+   data can collapse, and the offset itself is subtracted on the link
+   scale, so predictions are per unit of exposure. Any other offset, such
+   as a BM scale, stays at each policy's own value and becomes part of the
+   profile, because the observed line is at each policy's own BM too.
 4. Build the grid: factor levels, or the sorted distinct values when there
    are at most `grid_res` of them, otherwise an equally spaced sequence.
 5. **Collapse to unique profiles.** Rows sharing identical values on all
@@ -2797,13 +3026,22 @@ This is Fox and Monette's generalisation: for a single-column term it
 reduces to the ordinary VIF, and the scaled form makes terms of different
 width comparable.
 
-**Returns.** A data.frame `Term`, `DF`, `GVIF`, `GVIF_scaled`, `Flag`,
-sorted by `GVIF_scaled` descending. Zero rows with a message when the model
-has fewer than two estimable terms.
+**Returns.** A data.frame `Term`, `DF`, `GVIF`, `GVIF_scaled`,
+`InInteraction`, `Flag`, sorted by `GVIF_scaled` descending. Zero rows with
+a message when the model has fewer than two estimable terms.
 
-**Warnings.** Flagged terms are named. A singular correlation matrix,
-itself a sign of exact collinearity, returns zero rows with a warning rather
-than a numerical error.
+**Terms in an interaction.** An interaction term, and every term whose
+variables appear in one, has `InInteraction = TRUE` and `Flag = NA`. Their
+GVIF depends on the coding: centring the numeric side of an interaction
+moves the other variable's main-effect coefficients to another reference
+point, and with it their correlation with the interaction's. A term outside
+any interaction is unaffected, because a GVIF is invariant to any
+reparametrisation of the remaining terms, so its flag stands.
+
+**Warnings.** Flagged terms are named, and so are the terms in an
+interaction. A singular correlation matrix, itself a sign of exact
+collinearity, returns zero rows with a warning rather than a numerical
+error.
 
 **Interpretation.** `GVIF_scaled` is on the square-root scale, so 3
 corresponds to a VIF of roughly 9. High values invalidate the *individual*
@@ -2821,7 +3059,8 @@ factors of that term, not the model's predictions.
 model_lift(model_freq = NULL, model_sev = NULL, data = NULL,
            actual_col = "SCHADELAST", exposure_col = "Exposure",
            claims_col = "AantalClaims", weight_col = NULL,
-           n_bins = 10, y_range = NULL, keep_offsets = TRUE)
+           n_bins = 10, y_range = NULL, keep_offsets = TRUE,
+           n_boot = 200, conf_level = 0.90, seed = NULL, at = NULL)
 ```
 
 | Argument | Type | Default | Meaning |
@@ -2834,6 +3073,8 @@ model_lift(model_freq = NULL, model_sev = NULL, data = NULL,
 | `keep_offsets` | logical(1) | `TRUE` | keep every other offset, such as a BM scale, in the prediction; `FALSE` takes all offsets out |
 | `weight_col` | character(1) or NULL | `NULL` | column to bin and weight on; `NULL` picks it from the models (see below) |
 | `n_bins` | integer | `10` | bins of equal weight |
+| `n_boot`, `conf_level`, `seed` | integer, numeric(1), integer or NULL | `200`, `0.90`, `NULL` | bootstrap interval around the Gini; `n_boot = 0` switches it off |
+| `at` | named list or NULL | `NULL` | values every policy is priced at, as in `premium_impact()`; normally not wanted here, since the claims happened in their own year |
 
 **The weight follows the model.** A severity model predicts a mean **per
 claim**, so weighting it by exposure multiplies a per-claim amount by a
@@ -2853,8 +3094,8 @@ volume bars. Set `weight_col` explicitly only to override it.
    class without discount, and a correct model then read as much too
    expensive as the average discount, in every bin; on a book with an
    average discount of 20%, an in-sample A/E of 1.000 came out as 0.800.
-2. Drop rows with non-finite values or non-positive exposure, with a
-   warning counting them.
+2. Drop rows without a usable prediction, a positive weight or an actual
+   value, with a warning that counts them per reason.
 3. Order by predicted rate and assign bins by **cumulative weight**, so
    each bin holds `1/n_bins` of the book.
 4. Per bin: `ActualRate = Σactual / Σw`, `PredictedRate = Σ(rate·w) / Σw`,
@@ -2863,10 +3104,15 @@ volume bars. Set `weight_col` explicitly only to override it.
    share and `y` the cumulative loss share, both ordered by the
    prediction, `Gini = 1 − 2·∫y dx` by the trapezoid rule. `NA` when there
    are no losses at all, since there is then no curve to measure.
+6. Bootstrap: `n_boot` replicates of the Gini with Poisson(1) counts per
+   policy, the large-sample stand-in for resampling with replacement, on
+   the book sorted once; `gini_ci` holds the `conf_level` quantiles. A
+   warning when the interval is wider than half the Gini and than 0.05 and
+   the ten largest records carry 10% or more of `actual_col`.
 
 **Returns.** `table` (`Bin`, `Exposure`, `ExposureShare`, `ActualRate`,
-`PredictedRate`, `AE`), `gini`, `stats` (including `in_sample`), `plot`,
-`plot_lorenz`. `Exposure` and `ExposureShare` hold whatever `weight_col`
+`PredictedRate`, `AE`), `gini`, `gini_ci`, `stats` (including `in_sample`,
+`gini_ci`, `conf_level`, `n_boot`), `plot`, `plot_lorenz`. `Exposure` and `ExposureShare` hold whatever `weight_col`
 resolved to, so on a severity-only lift they are claim counts; the axis
 titles name it.
 
@@ -2887,20 +3133,32 @@ double_lift(data, model_freq_new = NULL, model_sev_new = NULL,
             old_premium_col = NULL,
             old_premium_basis = c("amount", "rate"),
             actual_col = "SCHADELAST", exposure_col = "Exposure",
+            claims_col = "AantalClaims", weight_col = NULL,
             n_bins = 10, rebase = TRUE, y_range = NULL,
-            keep_offsets = TRUE)
+            keep_offsets = TRUE, n_boot = 200, conf_level = 0.90,
+            seed = NULL, at = NULL)
 ```
 
-**Algorithm.** Compute both rates through the same helper
-[`premium_impact()`](#premium_impact) uses, so the two cannot drift apart.
-Rebase the new rates by `Σ(old·w) / Σ(new·w)` when `rebase = TRUE`. Order by
-`ratio = new/old`, bin by equal exposure, and per bin compute the A/E of
-each model. `mad_new` and `mad_old` are the mean absolute distance of those
-A/E series from 1.0, and `winner` names the smaller.
+**Algorithm.** Resolve the weight: `claims_col` when both sides are
+severity models, otherwise `exposure_col`; a severity model against a
+frequency or risk premium is refused. Compute both rates through the same
+helper [`premium_impact()`](#premium_impact) uses, so the two cannot drift
+apart, with `at` applied to what the models score and an old premium
+amount divided by the weight. Rebase the new rates by `Σ(old·w) /
+Σ(new·w)` when `rebase = TRUE`. Order by `ratio = new/old`, bin by equal
+weight, and per bin compute the A/E of each model. `mad_new` and `mad_old`
+are the mean absolute distance of those A/E series from 1.0. The bootstrap
+reweights the policies with Poisson(1) counts within the bins cut on the
+full data, rebasing each replicate again, and takes the `conf_level`
+quantiles of `mad_old - mad_new`. `winner` is `"tie"` when the two point
+values are equal, otherwise `"new"` or `"old"` when the interval excludes
+0 and `"inconclusive"` when it does not; with `n_boot = 0` the smaller
+point value wins.
 
 **Returns.** `table` (`Bin`, `Exposure`, `RateRatio`, `ActualRate`,
-`AE_New`, `AE_Old`), `stats` (`mad_new`, `mad_old`, `winner`,
-`rate_level_change`), `plot`. `rate_level_change` is measured before any
+`AE_New`, `AE_Old`; `Exposure` holds the weight), `stats` (`mad_new`,
+`mad_old`, `mad_diff`, `mad_diff_ci`, `winner`, `conf_level`, `n_boot`,
+`rate_level_change`, `weight_col`), `plot`. `rate_level_change` is measured before any
 rebasing, so it reports the level difference between the two tariffs whether
 or not `rebase` is in force.
 
@@ -2910,7 +3168,9 @@ of the picture, not a substitute for it, look at *where* a model drifts, not
 only how far.
 
 **Errors.** No new model; neither old models nor `old_premium_col`; both
-supplied at once; `n_bins < 2`; no usable rows.
+supplied at once; a severity model against a frequency or risk premium;
+`n_bins < 2`; invalid `n_boot` or `conf_level`; a value a model was not
+fitted on; no usable rows.
 
 ---
 
@@ -2925,10 +3185,20 @@ plot_glm_residuals(model, predictor = NULL, n_bins = 50,
                    residual_type = c("pearson", "deviance"), y_range = NULL)
 ```
 
-**Algorithm.** Take residuals of the chosen type; bin by fitted value
-(default) or by a predictor using the [grouping rule](#shared-behaviour);
-per bin compute the mean residual and the band `±2·√(φ/n)` with `φ` the
+**Algorithm.** Take residuals of the chosen type. Deviance residuals are
+centred: each row's expectation under the fitted model is subtracted, and
+its variance kept, both computed exactly for the Poisson, quasi-Poisson,
+negative binomial (unit weights), binomial (up to 20 distinct trial
+counts), Gamma and Gaussian families on a grid of the one parameter they
+depend on; any other family is left uncentred with a warning. Bin by fitted
+value (default) or by a predictor using the [grouping
+rule](#shared-behaviour); per bin compute the mean residual and the band
+`±2·√(Σ var) / n`, which is `±2·√(φ/n)` for Pearson residuals with `φ` the
 Pearson dispersion.
+
+**Why centre.** A deviance residual is not zero on average: a claim-free
+row has `-√(2μ)`. On a correct Poisson book of 60,000 rows the uncentred
+bins averaged -0.220 against a band of 0.058, all 50 of them outside it.
 
 **Returns.** A plotly object: a shaded band with the mean-residual line
 for a numeric axis, error bars per level for a categorical one.
@@ -2954,7 +3224,7 @@ plot_glm_qq(model, n_max = 5000, band = TRUE, seed = NULL,
 
 | Argument | Type | Default | Meaning |
 |---|---|---|---|
-| `model` | glm | required | Poisson, quasipoisson, binomial, Gamma or gaussian; anything else falls back to deviance residuals with a warning |
+| `model` | glm | required | Poisson, quasipoisson, binomial, Gamma, gaussian, or a negative binomial without prior weights (`MASS::glm.nb()`); anything else falls back to deviance residuals with a warning |
 | `n_max` | integer | `5000` | points drawn, evenly spaced through the sorted residuals with both extremes kept; the residuals are computed on every row regardless |
 | `band` | logical | `TRUE` | draw the pointwise 95% envelope |
 | `seed` | integer or NULL | `NULL` | fixes the randomisation used on a discrete response |
@@ -2973,6 +3243,8 @@ plot_glm_qq(model, n_max = 5000, band = TRUE, seed = NULL,
 Dispersion follows the family: fixed at 1 for Poisson and binomial (that
 assumption is precisely what the plot tests, so estimating it would hide
 what is being looked for), and the Pearson estimate for Gamma and gaussian.
+A negative binomial uses its own `theta`, read from the model or from its
+family.
 See [reading a Q-Q plot](#reading-a-q-q-plot-of-quantile-residuals) for the
 per-family CDFs and what the standard packages plot instead.
 
@@ -3067,9 +3339,12 @@ detect_interactions(model, vars = NULL, n_bins = 10, min_claims = 30,
    on the table, with `df = (R−1)(C−1)` over non-empty rows and columns.
 4. Reference distribution. For a Poisson count model: draw
    `A* ~ Poisson(E*)`, re-rake to the margins of `A*` (necessary, since
-   those margins differ per draw), recompute `D`, `n_sim` times. Otherwise
-   the dispersion-scaled chi-square is used.
-5. `Z = (D − mean(D*)) / sd(D*)`; `P = (1 + #{D* ≥ D}) / (n_sim + 1)`.
+   those margins differ per draw), recompute `D`, `n_sim` times. Both `D`
+   and the draws are scaled for overdispersion: with `φ = Σ(y − μ)² / Σμ ·
+   n/df` over the rows, at least 1, the statistic is `D/φ` and the draws
+   are `A* ~ Poisson(E*/φ)`. Otherwise the dispersion-scaled chi-square is
+   used.
+5. `Z = (D/φ − mean(D*)) / sd(D*)`; `P = (1 + #{D* ≥ D/φ}) / (n_sim + 1)`.
 
 **Returns.** A data.frame, strongest `Z` first:
 
@@ -3081,6 +3356,7 @@ detect_interactions(model, vars = NULL, n_bins = 10, min_claims = 30,
 | `Z` | the standardised statistic; **this is the ranking column** |
 | `P` | bootstrap p-value, floored at `1/(n_sim+1)` |
 | `Method` | `"simulation"` or `"chisq"` |
+| `Dispersion` | the `φ` the statistic was scaled by |
 | `MaxAE` | A/E of the worst cell holding at least `min_claims` claims |
 | `MaxAE_Claims`, `MaxAE_ExposureShare` | that cell's volume and its share of total exposure |
 
@@ -3090,10 +3366,19 @@ negative `Z` means the cells fit better than chance and is not evidence of
 anything. Look at the *gap* between the top `Z` and the rest; a top value
 only marginally above the others is likely the upper tail of noise.
 
-**Limitation.** The simulation assumes Poisson noise. On an overdispersed
-portfolio the null is too narrow and `Z` is optimistic, check
-`glm_diagnostics()` and treat `Z` as an upper bound when the dispersion is
-well above 1.
+**Overdispersion.** Without the scaling the Poisson null is too narrow on
+an overdispersed portfolio: on ten books with a dispersion of 1.9 and no
+interaction, 33 of 60 pairs came out at `P < 0.05`. The `φ` is the
+dispersion of a cell total, the mean-weighted Pearson, not the row-level
+one: a cell total adds rows by their mean, and under a gamma frailty the
+rows with a larger mean carry more of the extra variance (1.91 against
+1.72 on that book). Measured over 100 books per case: 3.3% false positives
+at a dispersion of 1.94, 6.7% on pure Poisson, and an interaction of 0.15
+on the log scale found in 83% (Poisson) and 48% (dispersion 2) of the
+books.
+
+**Limitation.** One `φ` for the whole book. Under a gamma frailty the cells
+with large expected counts carry more overdispersion than the average.
 
 **Cost.** `O(p²)` pairs, each `n_sim` rakes of a small table. Cheap: the
 tables are at most `n_bins × n_bins`.
@@ -3128,7 +3413,9 @@ the data range; `z_range` fixes it across several heatmaps.
 
 **Design note.** Thin cells are deliberately left blank. Their A/E is
 mostly noise, and colouring them would make the least reliable cell the
-loudest thing on the plot. Their volume remains in the tooltip.
+loudest thing on the plot. Their volume remains in the tooltip. When every
+cell is thin there is no colour layer at all, only the crosses, with a
+warning: plotly cannot build a heatmap of nothing but `NA`.
 
 **Cost.** O(n) plus a small cross-tabulation.
 
@@ -3144,13 +3431,16 @@ model. Requires `xgboost`.
 screen_features(model, features = NULL, split = c(0.6, 0.2, 0.2),
                 max_depth = 2, eta = 0.05, nrounds = 2000,
                 early_stopping_rounds = 40, n_shap = 4000,
-                cor_threshold = 0.95, max_levels = 50, seed = NULL)
+                cor_threshold = 0.95, max_levels = 50, max_rows = Inf,
+                tree_method = "hist", nthread = NULL, seed = NULL,
+                exposure_col = "Exposure", claims_col = "AantalClaims",
+                loss_col = "SCHADELAST")
 ```
 
 | Argument | Type | Default | Meaning |
 |---|---|---|---|
 | `model` | glm | required | the baseline. May be as small as `y ~ 1 + offset(log(Exposure))` |
-| `features` | character or NULL | `NULL` | candidates; `NULL` = every usable column except response and offset |
+| `features` | character or NULL | `NULL` | candidates; `NULL` = every usable column except the response, the offset, the prior weights and the outcome columns below; a column named here stays, with a warning if it is an outcome column |
 | `split` | numeric(3) | `c(.6,.2,.2)` | train / validation (early stopping) / test (reporting); must sum to 1 |
 | `max_depth` | integer | `2` | depth of the second booster |
 | `eta`, `nrounds`, `early_stopping_rounds` | | `.05`, `2000`, `40` | boosting parameters |
@@ -3161,11 +3451,12 @@ screen_features(model, features = NULL, split = c(0.6, 0.2, 0.2),
 | `tree_method` | character(1) | `"hist"` | how xgboost searches for splits; `"hist"` bins each feature first, which is much the fastest |
 | `nthread` | integer or NULL | `NULL` | boosting threads; `NULL` = available cores minus one |
 | `seed` | integer or NULL | `NULL` | reproducible sample, split and boosting |
+| `exposure_col`, `claims_col`, `loss_col` | character(1) | `"Exposure"`, `"AantalClaims"`, `"SCHADELAST"` | outcome and volume columns kept out of the default candidates |
 
 **Performance.** Boosting is where the time goes. Profiled on 2,000,000
 rows with 6 candidates, the two boosters were 82% of the whole call and
-everything else — recovering the model frame, refitting the baseline,
-building the design matrices, the permutation pass, the SHAP array —
+everything else (recovering the model frame, refitting the baseline,
+building the design matrices, the permutation pass, the SHAP array)
 together made up the rest.
 
 So the first lever is `tree_method`, and it costs nothing. `"hist"` bins
@@ -3175,7 +3466,7 @@ where `"auto"` still picks the slower `"approx"` on large data:
 
 | `tree_method` | boosting + permutation | test deviance | ranking |
 |---|---|---|---|
-| `"approx"` (xgboost 1.x default) | 291.6 s | 130640.6 | — |
+| `"approx"` (xgboost 1.x default) | 291.6 s | 130640.6 | reference |
 | **`"hist"`** | **108.4 s** | 130640.5 | identical |
 
 The default screens every row, so `max_rows` and `nthread` are the next
@@ -3191,8 +3482,14 @@ it.
 
 **Algorithm.**
 
-1. Classify candidates and drop the unusable, one warning per reason:
-   `constant`, `too many levels`, `unsupported type`.
+1. Collect the candidates: without `features`, every column except the
+   response, the offset, the prior weights, `claims_col`, `loss_col` and
+   `exposure_col`, with a message naming the outcome columns left out.
+   Offered the loss amount, the booster ranked it first with a
+   `PermDeviance` of 7,188 and 97% of the gain on a frequency model, so
+   the verdict was about leakage. Classify the candidates and drop the
+   unusable, one warning per reason: `constant`, `too many levels`,
+   `unsupported type`.
 2. Fix the factor level map **once on the full data**, so a column has the
    same matrix width in every split.
 3. Split rows, then **refit the baseline on the training split**, so both
@@ -3248,9 +3545,9 @@ nothing at all. Use this to screen features and for the global verdict; use
 Gamma with a log link; anything else is refused. The split is internal and
 does not propagate to the rest of the package.
 
-**Warnings.** Dropped candidates (with the reason); near-duplicate pairs;
-a baseline that could not be refitted, naming the variable that lost its
-variation.
+**Warnings.** Dropped candidates (with the reason); an outcome column named
+in `features`; near-duplicate pairs; a baseline that could not be refitted,
+naming the variable that lost its variation.
 
 **Cost.** Two boosting runs plus `p` permutation passes over the test
 split, plus `O(n_shap · k²)` for the SHAP array with `k` matrix columns.
@@ -3268,7 +3565,8 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
                   claims_col = "AantalClaims",
                   base_level = c("first", "exposure"),
                   trim = c(0, 1), min_claims = 30, grid_step = NULL,
-                  base = NULL, merge_vars = NULL)
+                  base = NULL, merge_vars = NULL, year_col = "BOEKJAAR",
+                  loss_col = "SCHADELAST")
 ```
 
 | Argument | Type | Default | Meaning |
@@ -3279,11 +3577,14 @@ make_rating_table(model_freq = NULL, model_sev = NULL, data,
 | `grid_step` | numeric or named list | `NULL` | grid step for continuous variables, globally or per variable |
 | `base` | named list or vector | `NULL` | base (factor 1) per variable; overrides `base_level` and the median for the variables named |
 | `merge_vars` | named list or vector | `NULL` | columns that are a regrouping of another variable, keyed by the variable to keep; reported as one block |
+| `year_col` | character(1) or NULL | `"BOEKJAAR"` | accounting year, whose default base is its latest year; `NULL` treats it like any other variable |
+| `loss_col` | character(1) | `"SCHADELAST"` | loss amount, read only for the warning on claims without payment |
 
 **The base point.** One consistent convention: categorical variables at
-their reference level, continuous variables at their **median** (inserted as
-an explicit grid point so a row with factor exactly 1 exists), and the
-exposure column at **1**. Hence, for log-link models without interactions,
+their reference level, the accounting year at its **latest** year,
+continuous variables at their **median** (inserted as an explicit grid
+point so a row with factor exactly 1 exists), and the exposure column at
+**1**. Hence, for log-link models without interactions,
 the identity holds exactly:
 
 ```
@@ -3300,6 +3601,18 @@ by the prediction at base; a variable absent from one model gets the neutral
 factor 1 there. For each two-way term, predict over the 2D grid and scale to
 the base cell, then derive the uplift `joint / (mainₓ · main_g)`.
 
+A term whose levels are not values of its column, such as `cut(AGE, ...)`,
+is predicted on the most frequent value of the column within each band, and
+its volumes are counted on the evaluated term. A logical column stays
+logical. A level a model was not fitted on is predicted as `NA` for that
+model only, so the variable keeps its row; the base row itself must be
+known to every model, and is checked first.
+
+The standard error of each log factor is `√(dᵀVd)`, with `d` the difference
+between the row's and the base's model-matrix rows (built exactly as
+`predict()` builds them) and `V = vcov(model)`. For a categorical level
+against the reference that is the coefficient's own standard error.
+
 **Returns.** One row per level or grid point:
 
 | Column | Meaning |
@@ -3310,15 +3623,21 @@ the base cell, then derive the uplift `joint / (mainₓ · main_g)`.
 | `Group`, `XVar`, `GroupVar` | interaction bookkeeping (`NA` for main effects) |
 | `IsBase` | `TRUE` on the base row or cell, where the factor is exactly 1 |
 | `Exposure`, `ClaimCount` | data volume |
-| `Factor_Frequency`, `Factor_Severity`, `Factor_Premium` | relativities; `Premium = Frequency × Severity` |
+| `Factor_Frequency`, `Factor_Severity`, `Factor_Premium` | relativities; `Premium = Frequency × Severity`; `NA` where a model was not fitted on the level |
 | `Uplift_*` | interaction rows only: the pure interaction effect, 1 everywhere when there is none |
+| `SE_Frequency`, `SE_Severity` | standard error of the log factor; 0 at the base and for a variable the model does not use |
 | `IsThin` | `ClaimCount < min_claims` |
 
 Attributes: `intercept_frequency`, `intercept_severity`, `intercept_premium`
 (predictions at the base point, per unit of exposure) and `base_values`.
 
 **Warnings.** A non-log link (factors are then not pure relativities);
-skipped variables or interactions, with the reason; thin categorical levels.
+skipped variables or interactions, with the reason; thin categorical
+levels, naming those without claims; cells a model has no factor for;
+claims without payment.
+
+**Errors.** No model; missing columns; an invalid `trim`, `base`,
+`grid_step` or `merge_vars`; a base row a model was not fitted on.
 
 **Cost.** A handful of small `predict()` calls per variable, grids are
 tens to hundreds of rows, never `n`.
@@ -3401,8 +3720,9 @@ premium_impact(data, model_freq_new = NULL, model_sev_new = NULL,
                old_premium_col = NULL,
                old_premium_basis = c("amount", "rate"),
                rebase = TRUE, by = NULL, n_show = 10,
-               exposure_col = "Exposure", x_range = NULL, y_range = NULL,
-               keep_offsets = TRUE)
+               exposure_col = "Exposure", spotlight = NULL,
+               x_range = NULL, y_range = NULL, keep_offsets = TRUE,
+               at = NULL, year_col = "BOEKJAAR")
 ```
 
 | Argument | Type | Default | Meaning |
@@ -3414,10 +3734,16 @@ premium_impact(data, model_freq_new = NULL, model_sev_new = NULL,
 | `n_show` | integer | `10` | rows in the winners/losers tables |
 | `spotlight` | expression, logical or NULL | `NULL` | subset to report separately, evaluated against `data`; the book itself is still analysed in full |
 | `x_range`, `y_range` | numeric(2) or NULL | `NULL` | fix the histogram axes; `x_range` bounds the change axis and only sets the visible window, the bins always span the full range, so the statistics are unaffected |
+| `at` | named list or NULL | `NULL` | values every policy is priced at by the models, e.g. `list(BOEKJAAR = 2024)`; never applied to `old_premium_col` |
+| `year_col` | character(1) or NULL | `"BOEKJAAR"` | the accounting year, for the warning when the year is priced per policy against a premium column; `NULL` switches it off |
 
-**Algorithm.** Predict both sides as rates per unit of exposure, with the
-exposure offset taken out and any other offset kept (see `keep_offsets`);
-the premium is the product of the models supplied. Drop rows with a non-finite or non-positive premium or exposure.
+**Algorithm.** Apply `at` to the data the models score. Name any factor
+value a model was not fitted on (an error) and any numeric value outside
+its fitted range (a warning). Predict both sides as rates per unit of
+exposure, with the exposure offset taken out and any other offset kept (see
+`keep_offsets`); the premium is the product of the models supplied. Drop
+rows without a usable new or old premium or a positive exposure, with a
+warning that counts them per reason.
 Compute the overall rate-level change, apply the rebase factor when asked,
 then the per-policy change. Quantiles are exposure-weighted. The histogram
 is pre-binned in R into 60 bars, because a plotly histogram trace would
@@ -3450,10 +3776,12 @@ export_rating_table(rating_tbl, file = "rating_table.xlsx",
 ```
 
 **Workbook.** An **Overview** sheet with a timestamp, the intercepts per
-unit of exposure and the base value per variable; one sheet per main-effect
-variable with the base row highlighted and thin rows greyed out; one sheet
-per interaction with the long table plus a Level × Group matrix of the
-premium factor. Sheet names are sanitised to Excel's rules and deduplicated
+unit of exposure and the base value per variable, as numbers; a **Tariff**
+sheet with every factor under a `Key`, where an interaction key holds the
+uplift; one sheet per main-effect variable with the base row highlighted
+and thin rows greyed out, including the `SE_*` columns; one sheet per
+interaction with the long table plus a Level × Group matrix of the premium
+factor. Sheet names are sanitised to Excel's rules and deduplicated
 (`LEEFTIJD:REGIO` → `LEEFTIJD_REGIO`).
 
 **Returns.** Invisibly, the normalised path.
@@ -3475,7 +3803,8 @@ pricing_report(model_freq = NULL, model_sev = NULL, data,
                exposure_col = "Exposure", claims_col = "AantalClaims",
                loss_col = "SCHADELAST", year_col = "BOEKJAAR",
                grid_res = 50, base_level = c("first", "exposure"),
-               trim = c(0, 1))
+               trim = c(0, 1), merge_vars = NULL, base = NULL,
+               grid_step = NULL)
 ```
 
 **Blocks.** `include` selects them: `"diagnostics"` (fit table and binned
@@ -3494,8 +3823,14 @@ count, and by a different factor in every group, so the shape is wrong too.
 If your data holds the average, reconstruct the total first:
 `data$SCHADELAST <- data$AVG_LOSS * data$AantalClaims`.
 
-**Robustness.** Each plot is wrapped: a failure becomes a visible note in
-the report instead of aborting the run.
+**Rating table.** Built once, with `grid_res`, `base_level`, `trim`,
+`merge_vars`, `base`, `grid_step`, `year_col`, `loss_col` and the column
+arguments, exactly as [`make_rating_table()`](#make_rating_table) would.
+
+**Robustness.** Each plot is built inside the guard, so a failure becomes
+a visible note in the report instead of aborting the run; plotly would
+otherwise only build it when the page is written, outside the guard. Large
+numbers in a table print in scientific notation rather than as "NA".
 
 **Output.** Built with `htmltools::save_html()`, so **no pandoc is
 required** and the plots stay interactive. A `<name>_files/` folder is

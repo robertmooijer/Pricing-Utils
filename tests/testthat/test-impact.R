@@ -33,8 +33,11 @@ test_that("rebase separates rate-level change from dislocation", {
                       type = "response") *
               predict(m_sev, newdata = d2, type = "response")
   d2$OldPrem <- 2 * new_rate * d2$Exposure
-  imp2 <- premium_impact(d2, model_freq_new = m_freq, model_sev_new = m_sev,
-                         old_premium_col = "OldPrem")
+  # m_freq has factor(BOEKJAAR), and a premium column has no year (RATE-10)
+  expect_warning(
+    imp2 <- premium_impact(d2, model_freq_new = m_freq, model_sev_new = m_sev,
+                           old_premium_col = "OldPrem"),
+    "priced at the level of its own year")
   expect_true(abs(imp2$stats$rate_change + 0.5) < 1e-10)
   expect_lt(max(abs(imp2$policy$ChangePct)), 1e-8)
   expect_equal(nrow(imp2$largest_increases), 10)

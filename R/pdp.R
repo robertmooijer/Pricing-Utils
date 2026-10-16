@@ -3,13 +3,18 @@
 #' Computes the PDP on the response scale: for each grid value of `pred_var`
 #' the whole training data is set to that value, predicted with
 #' `predict(type = "response")`, and the weighted arithmetic mean is taken
-#' (frequency: exposure-weighted; severity: claim-weighted). The whole
+#' (frequency: exposure-weighted; severity: claim-weighted). The exposure
 #' offset is subtracted on the link scale, so the PDP is a frequency per
-#' unit of exposure and directly comparable to the observed line. That
-#' includes a second offset such as a bonus-malus scale: the PDP is at
-#' BM = 1, the class without discount, like the rating table.
+#' unit of exposure and directly comparable to the observed line.
 #' (`exp(mean(link))` would be a geometric mean, including the offset, and
 #' systematically biased low.)
+#'
+#' Any other offset, a bonus-malus scale carried as `offset(log(BM))`,
+#' stays in at each policy's own value by default, because the observed
+#' line is at each policy's own BM as well. Taking it out put the PDP at
+#' the class without discount: on a book with an average BM of 0.74 it ran
+#' 35% above the observed line at every level of a variable the model had
+#' exactly right. The rating table is the place for factors at BM = 1.
 #'
 #' The "Observed" line is a one-way marginal (including correlations with
 #' other rating factors); the PDP is a partial effect. Differences between
@@ -34,6 +39,11 @@
 #' @param y_range Optional `c(lo, hi)` to fix the primary y-axis range, so
 #'   PDPs for different predictors become directly comparable. `NULL`
 #'   (default) auto-scales to this plot's own values.
+#' @param keep_offsets `TRUE` (default): only the exposure offset is taken
+#'   out, and any other offset stays in at each policy's own value, as it
+#'   does in [premium_impact()] and [model_lift()]. `FALSE` takes every
+#'   offset out, which puts the PDP at BM = 1 and no longer on the level of
+#'   the observed line. The default y-axis title names the offsets kept.
 #'
 #' @return A plotly object with exposure/claim bars, the observed one-way
 #'   line and the PDP line.
@@ -50,12 +60,18 @@ make_pdp <- function(model,
                      claims_col   = "AantalClaims",
                      loss_col     = "SCHADELAST",
                      discrete_cutoff = 25,
-                     y_range      = NULL) {
+                     y_range      = NULL,
+                     keep_offsets = TRUE) {
 
   metric  <- match.arg(metric)
   y_range <- .check_range(y_range, "make_pdp")
   if (!inherits(model, "glm"))
     stop("make_pdp: 'model' must be a glm object.", call. = FALSE)
+  if (!is.logical(keep_offsets) || length(keep_offsets) != 1 ||
+      is.na(keep_offsets))
+    stop("make_pdp: 'keep_offsets' must be TRUE or FALSE.", call. = FALSE)
+  # [DATA-06]
+  model <- .as_na_omit(model)
   if (!is.null(transform))
     warning("make_pdp: 'transform' is deprecated and ignored; the PDP is ",
             "computed directly on the response scale.", call. = FALSE)
@@ -81,10 +97,13 @@ make_pdp <- function(model,
   )
   obs_agg[!is.finite(.obs), .obs := NA_real_]
 
+  kept <- .kept_offsets(list(model), exposure_col, keep_offsets)
   if (is.null(y_label)) {
     y_label <- switch(metric,
                       "Frequency" = "Frequency (claims / exposure)",
                       "Severity"  = "Severity (loss / claim)")
+    if (length(kept))
+      y_label <- paste0(y_label, ", incl. ", paste(kept, collapse = ", "))
   }
   exposure_label <- switch(metric,
                            "Frequency" = "Exposure",
@@ -135,19 +154,36 @@ make_pdp <- function(model,
     tr$weights                        # severity: prior weights = claim counts
   }
 
-  # [OFF-06]
-  # Neutralise the offset, so the PDP is a frequency per unit of exposure
-  # and comparable to the observed line. The offset variables are pinned to
-  # a constant here because that is what lets the data collapse to unique
-  # predictor profiles below; the offset itself is then subtracted on the
-  # link scale by .predict_no_offset(), which is what makes this correct
-  # for offset(Exposure) and offset(log(Months / 12)) as well as for the
-  # usual offset(log(Exposure)).
+  # [OFF-06] [PDP-05]
+  # Take the exposure offset out, so the PDP is a frequency per unit of
+  # exposure, and leave any other offset in at each policy's own value: the
+  # observed line it is drawn against is at each policy's own BM too.
+  # Taking a BM offset out as well put the PDP at the class without
+  # discount, 1.35 times the observed line at every level (measured with an
+  # average BM of 0.74). .offset_split() decides which expressions go, as
+  # it does for premium_impact() and the lifts.
+  #
+  # The variables of the offsets that go are pinned to a constant, because
+  # that is what lets the data collapse to unique predictor profiles below;
+  # those offsets are then subtracted on the link scale by
+  # .predict_no_offset(), which is what makes this correct for
+  # offset(Exposure) and offset(log(Months / 12)) as well as for the usual
+  # offset(log(Exposure)). A kept offset's variables stay as they are and
+  # become part of the profile.
+  sp  <- .offset_split(model, exposure_col, keep_offsets)
   nd0 <- train_df
   if (has_offset) {
     ov  <- .offset_vars(model)
-    hit <- intersect(ov, names(nd0))
-    for (v in hit) nd0[[v]] <- 1
+    pin <- setdiff(unique(unlist(lapply(.offset_exprs(model)[sp$drop],
+                                        all.vars))), sp$kept)
+    for (v in intersect(pin, names(nd0))) nd0[[v]] <- 1
+    if (length(sp$mixed))
+      warning("make_pdp: the exposure offset also holds '",
+              paste(sp$mixed, collapse = ", "), "' in the same expression, ",
+              "so the two cannot be separated and both are taken out. Write ",
+              "them as separate terms, offset(log(", exposure_col, ")) + ",
+              "offset(log(", sp$mixed[1], ")), to keep the second in.",
+              call. = FALSE)
     if (length(setdiff(ov, names(nd0))))
       warning("make_pdp: offset variable(s) ",
               paste(setdiff(ov, names(nd0)), collapse = ", "),
@@ -187,7 +223,10 @@ make_pdp <- function(model,
   # rating factors, integer ages, exposure already neutralised to 1) this
   # reduces the work from grid_res x n rows to grid_res x (profiles),
   # while leaving the weighted mean exactly unchanged.
-  vars_needed  <- .rhs_vars(model)
+  # The offset variables count too: an offset passed as glm(offset = ...)
+  # is not in the formula, and a kept one changes the prediction per row
+  vars_needed  <- unique(c(.rhs_vars(model),
+                           intersect(.offset_vars(model), names(nd0))))
   missing_vars <- setdiff(vars_needed, names(nd0))
   if (length(missing_vars))
     stop("make_pdp: column(s) required for prediction not found in the ",
@@ -212,7 +251,7 @@ make_pdp <- function(model,
   yhat <- vapply(seq_along(grid_vals), function(i) {
     nd <- prof
     nd[[pred_var]] <- .coerce_like(rep(grid_vals[i], nrow(nd)), x_train)
-    stats::weighted.mean(.predict_no_offset(model, nd),
+    stats::weighted.mean(.predict_no_offset(model, nd, sp$drop),
                          w = w_prof, na.rm = TRUE)
   }, numeric(1))
 

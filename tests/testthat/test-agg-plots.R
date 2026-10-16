@@ -325,7 +325,9 @@ test_that("unusable monitoring data is refused rather than guessed at", {
   levels(d_new$R) <- c("N", "Z")
   d_new$R <- as.character(d_new$R)
   d_new$R[1] <- "O"                           # a level the model never saw
-  expect_error(plot_glm_predictor(mc, "R", data = d_new), "new level")
+  # named with its column, its value and its row count
+  expect_error(plot_glm_predictor(mc, "R", data = d_new),
+               "not fitted on: 'R' = O \\(1 row\\)")
 
   # rows with a missing value are dropped, exactly as glm() dropped them
   d_na <- d

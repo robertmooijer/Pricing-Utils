@@ -100,7 +100,7 @@ export_rating_table <- function(rating_tbl, file = "rating_table.xlsx",
         openxlsx::addStyle(wb, sn, st_thin, rows = thin_rows,
                            cols = seq_len(nc), gridExpand = TRUE, stack = TRUE)
     }
-    fac_cols <- grep("^(Factor|Uplift)", names(d))
+    fac_cols <- grep("^(Factor|Uplift|SE_)", names(d))
     if (length(fac_cols))
       openxlsx::addStyle(wb, sn, st_fac, rows = seq_len(nrow(d)) + 1,
                          cols = fac_cols, gridExpand = TRUE, stack = TRUE)
@@ -135,6 +135,24 @@ export_rating_table <- function(rating_tbl, file = "rating_table.xlsx",
   sn <- sheet_name("Overview")
   openxlsx::addWorksheet(wb, sn)
   openxlsx::writeData(wb, sn, ov, headerStyle = st_header)
+  # [EXP-05]
+  # The Value column mixes a timestamp, levels and numbers, so it is written
+  # as text first and the numbers are then written over it as numbers. A
+  # number stored as text is what a formula referring to the intercept
+  # would pick up, and in a locale with a decimal comma "0.110053" is not a
+  # number at all.
+  ints <- c(attr(rating_tbl, "intercept_frequency"),
+            attr(rating_tbl, "intercept_severity"),
+            attr(rating_tbl, "intercept_premium"))
+  for (k in seq_along(ints))
+    if (length(ints[k]) && isTRUE(is.finite(ints[k])))
+      openxlsx::writeData(wb, sn, as.numeric(ints[k]), startCol = 2,
+                          startRow = 2 + k)
+  if (!is.null(bv)) for (k in seq_along(bv)) {
+    x <- bv[[k]]
+    if (is.numeric(x) && length(x) == 1 && is.finite(x))
+      openxlsx::writeData(wb, sn, x, startCol = 2, startRow = 5 + k)
+  }
   openxlsx::setColWidths(wb, sn, cols = 1:2, widths = "auto")
 
   # [EXP-01] [EXP-03]
@@ -154,15 +172,33 @@ export_rating_table <- function(rating_tbl, file = "rating_table.xlsx",
     IsBase   = rating_tbl$IsBase,
     stringsAsFactors = FALSE)
   tf <- cbind(tf, rating_tbl[, tf_cols, drop = FALSE])
+  # [EXP-04]
+  # An interaction key carries the pure uplift, not the joint factor. The
+  # joint factor already holds both main effects, so the instruction below -
+  # every variable's factor, times each interaction key - counted them
+  # twice: measured on a WA tariff, premiums 16% too high on average and up
+  # to 3.4 times. With the uplift, main x main x uplift is the joint factor
+  # and the instruction holds literally. The interaction sheets keep both.
+  is_int <- !is.na(rating_tbl$Group)
+  for (cc in tf_cols) {
+    up <- sub("^Factor_", "Uplift_", cc)
+    if (any(is_int) && up %in% names(rating_tbl))
+      tf[[cc]][is_int] <- rating_tbl[[up]][is_int]
+  }
   sn <- sheet_name("Tariff")
   openxlsx::addWorksheet(wb, sn)
   openxlsx::writeData(
     wb, sn,
-    paste0("Premium = intercept x the factors of each variable. ",
-           "Look up a factor with VLOOKUP on the Key column, ",
+    paste0("Premium = intercept x the factor of every variable",
+           if (any(is_int)) paste0(" x, for each interaction, the factor of ",
+                                   "its key Variable|Level|Group. An ",
+                                   "interaction key holds the pure uplift on ",
+                                   "top of the two main effects") else "",
+           ". Look up a factor with VLOOKUP on the Key column, ",
            "e.g. =VLOOKUP(\"", rating_tbl$Variable[1], "|\"&<cell>, ",
            "Tariff!A:H, ", 5 + length(tf_cols), ", FALSE). ",
-           "Intercepts are on the Overview sheet."))
+           "Intercepts are on the Overview sheet. An offset such as a ",
+           "bonus-malus discount is not a factor here and is applied on top."))
   openxlsx::writeData(wb, sn, tf, startRow = 2, headerStyle = st_header)
   tf_base <- which(tf$IsBase %in% TRUE) + 2
   if (length(tf_base))
@@ -180,7 +216,7 @@ export_rating_table <- function(rating_tbl, file = "rating_table.xlsx",
   # Main-effect sheets ----------------------------------------------------------
   keep_main <- intersect(c("Level", "IsBase", "Exposure", "ClaimCount",
                            "IsThin", "Factor_Frequency", "Factor_Severity",
-                           "Factor_Premium"),
+                           "Factor_Premium", "SE_Frequency", "SE_Severity"),
                          names(rating_tbl))
   for (v in unique(rating_tbl$Variable[is.na(rating_tbl$Group)])) {
     rows <- rating_tbl$Variable == v & is.na(rating_tbl$Group)
@@ -194,8 +230,9 @@ export_rating_table <- function(rating_tbl, file = "rating_table.xlsx",
   keep_int <- intersect(c("Level", "Group", "IsBase", "Exposure",
                           "ClaimCount", "IsThin",
                           "Factor_Frequency", "Factor_Severity",
-                          "Factor_Premium", "Uplift_Frequency",
-                          "Uplift_Severity", "Uplift_Premium"),
+                          "Factor_Premium", "SE_Frequency", "SE_Severity",
+                          "Uplift_Frequency", "Uplift_Severity",
+                          "Uplift_Premium"),
                         names(rating_tbl))
   for (v in unique(rating_tbl$Variable[!is.na(rating_tbl$Group)])) {
     rows <- rating_tbl$Variable == v & !is.na(rating_tbl$Group)

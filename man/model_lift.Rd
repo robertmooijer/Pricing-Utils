@@ -14,7 +14,11 @@ model_lift(
   weight_col = NULL,
   n_bins = 10,
   y_range = NULL,
-  keep_offsets = TRUE
+  keep_offsets = TRUE,
+  n_boot = 200,
+  conf_level = 0.9,
+  seed = NULL,
+  at = NULL
 )
 }
 \arguments{
@@ -58,9 +62,31 @@ without discount, and a correct model then read about as much too
 expensive as the average discount, in every bin. \code{FALSE} takes every
 offset out. \code{stats$offsets_kept} and the axis title say which stayed
 in.}
+
+\item{n_boot}{Bootstrap replicates for an interval around the Gini
+(default 200; 0 switches it off). A Gini on raw losses is dominated by
+a few large claims: on a 16,000-policy holdout the 90\% interval ran
+from 0.14 to 0.33 around 0.23, wider than the difference between two
+models one might want to choose between. Policies are resampled with
+Poisson(1) counts, so the book is sorted once and a replicate is one
+pass over it. The interval is in the title and in \code{gini_ci}. When it
+is wider than half the Gini and wider than 0.05 \strong{and} the ten
+largest records carry 10\% or more of \code{actual_col}, a warning says so,
+since capping large losses is then the usual remedy; a wide interval
+on a small book has no such remedy and only shows in the title.}
+
+\item{conf_level}{Coverage of that interval (default 0.90).}
+
+\item{seed}{Optional seed for the bootstrap.}
+
+\item{at}{Optional named list of values to price every policy at, e.g.
+\code{list(BOEKJAAR = 2024)}; see \code{\link[=premium_impact]{premium_impact()}}. For a lift against
+the claims of the data itself this is normally not wanted: those
+claims happened in their own year.}
 }
 \value{
-A list with \code{table} (one row per bin), \code{gini}, \code{stats}, \code{plot}
+A list with \code{table} (one row per bin), \code{gini}, \code{gini_ci},
+\code{stats}, \code{plot}
 (the lift chart) and \code{plot_lorenz} (the curve behind the Gini). The
 \code{Exposure} and \code{ExposureShare} columns hold whatever \code{weight_col}
 resolved to, so on a severity-only lift they are claim counts; the

@@ -43,4 +43,15 @@ The bin means are drawn as points rather than joined into a line. They
 are independent draws, and a connecting line invites the eye to read a
 trend into what is mostly noise; the band is what says whether a point
 means anything.
+
+A Pearson residual has mean 0 and variance \code{phi} under the model, so its
+band is \verb{2 sqrt(phi / n)}. A \strong{deviance} residual is not centred: for a
+Poisson count with a small mean it is negative on average, since a
+claim-free row has \verb{-sqrt(2 mu)}. On a correct Poisson book every bin
+then sat below the band. Deviance residuals are therefore shown minus
+their expectation under the fitted model, row by row, and the band per
+bin is \verb{2 sqrt(sum of the row variances) / n}. Both moments are exact
+for the Poisson, negative binomial, binomial, Gamma and Gaussian
+families; for any other family the residuals are shown as they are,
+with a warning.
 }

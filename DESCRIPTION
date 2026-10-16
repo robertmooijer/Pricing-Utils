@@ -33,6 +33,7 @@ Imports:
     utils
 Suggests:
     htmltools,
+    MASS,
     openxlsx,
     statmod,
     testthat (>= 3.0.0),

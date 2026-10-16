@@ -239,17 +239,27 @@ test_that("a second offset does not end up on the exposure axis", {
   expect_equal(as.vector(obs$y) / as.vector(pre$y), rep(1, length(obs$y)),
                tolerance = 1e-8)
 
-  # the PDP average follows the same column as its own observed line
+  # the PDP average follows the same column as its own observed line, and
+  # keeps each policy's own BM, as that line does (PDP-05): only the
+  # exposure offset comes out
   pd <- tr(make_pdp(mb, db, "R", metric = "Frequency"), "PDP (model)")
-  hand <- function(wt) vapply(levels(db$R), function(lv) {
+  hand <- function(wt, bm = TRUE) vapply(levels(db$R), function(lv) {
     z <- db; z$R <- factor(lv, levels(db$R))
-    weighted.mean(.predict_no_offset(mb, z), wt) }, numeric(1))
+    r <- if (bm) .predict_no_offset(mb, z, 1L) else .predict_no_offset(mb, z)
+    weighted.mean(r, wt) }, numeric(1))
+  expect_identical(deparse(.offset_exprs(mb)[[1]]), "offset(log(Exposure))")
   expect_equal(as.vector(pd$y),
                as.vector(hand(db$Exposure)[as.character(pd$x)]),
                tolerance = 1e-8)
   # the two weightings really do differ here, so that was a live choice
   expect_false(isTRUE(all.equal(hand(db$Exposure),
                                 hand(db$Exposure * db$BM))))
+  # keep_offsets = FALSE puts every policy at BM = 1, as before
+  pd0 <- tr(make_pdp(mb, db, "R", metric = "Frequency", keep_offsets = FALSE),
+            "PDP (model)")
+  expect_equal(as.vector(pd0$y),
+               as.vector(hand(db$Exposure, bm = FALSE)[as.character(pd0$x)]),
+               tolerance = 1e-8)
 
   # the premium chain still reconstructs, BM applied on top
   tb <- suppressWarnings(make_rating_table(mb, NULL, data = db))

@@ -20,7 +20,10 @@ pricing_report(
   year_col = "BOEKJAAR",
   grid_res = 50,
   base_level = c("first", "exposure"),
-  trim = c(0, 1)
+  trim = c(0, 1),
+  merge_vars = NULL,
+  base = NULL,
+  grid_step = NULL
 )
 }
 \arguments{
@@ -54,6 +57,10 @@ plot as heatmaps (default 3).}
 
 \item{grid_res, base_level, trim}{Passed to \code{\link[=make_pdp]{make_pdp()}} /
 \code{\link[=make_rating_table]{make_rating_table()}}.}
+
+\item{merge_vars, base, grid_step}{Passed to \code{\link[=make_rating_table]{make_rating_table()}}, so the
+report shows the same tariff as a table built with them. \code{year_col}
+and \code{loss_col} are passed on too.}
 }
 \value{
 Invisibly, the normalised path of the written file.

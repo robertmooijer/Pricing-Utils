@@ -14,10 +14,16 @@ double_lift(
   old_premium_basis = c("amount", "rate"),
   actual_col = "SCHADELAST",
   exposure_col = "Exposure",
+  claims_col = "AantalClaims",
+  weight_col = NULL,
   n_bins = 10,
   rebase = TRUE,
   y_range = NULL,
-  keep_offsets = TRUE
+  keep_offsets = TRUE,
+  n_boot = 200,
+  conf_level = 0.9,
+  seed = NULL,
+  at = NULL
 )
 }
 \arguments{
@@ -29,18 +35,26 @@ double_lift(
 
 \item{old_premium_col}{Column holding the current premium.}
 
-\item{old_premium_basis}{\code{"amount"} (default; divided by exposure
-internally) or \code{"rate"} (already per unit of exposure).}
+\item{old_premium_basis}{\code{"amount"} (default; divided by the weight
+column, normally the exposure, internally) or \code{"rate"} (already per
+unit of it).}
 
 \item{actual_col}{Column with the realised amount (default
 \code{"SCHADELAST"}).}
 
 \item{exposure_col}{Exposure column (default \code{"Exposure"}).}
 
-\item{n_bins}{Number of equal-exposure bins (default 10).}
+\item{claims_col}{Claim count column (default \code{"AantalClaims"}), the
+weight when both sides are severity models.}
 
-\item{rebase}{\code{TRUE} (default) scales the new rates so the
-exposure-weighted totals match, isolating differentiation from level.}
+\item{weight_col}{Column to bin and weight on. \code{NULL} (default) picks it
+as \code{\link[=model_lift]{model_lift()}} does: \code{claims_col} when both sides are severity
+models, otherwise \code{exposure_col}. Set it only to override that choice.}
+
+\item{n_bins}{Number of equal-weight bins (default 10).}
+
+\item{rebase}{\code{TRUE} (default) scales the new rates so the weighted
+totals match, isolating differentiation from level.}
 
 \item{y_range}{Optional \code{c(lo, hi)} to fix the A/E axis.}
 
@@ -49,12 +63,28 @@ out of both rates, and any other offset - a bonus-malus scale - stays
 in, as it must for an A/E against claims that happened at each
 policy's own BM. An old premium column must then include the discount
 too. \code{FALSE} takes every offset out. See \code{\link[=premium_impact]{premium_impact()}}.}
+
+\item{n_boot}{Bootstrap replicates behind \code{winner} (default 200). \code{0}
+switches the bootstrap off, and \code{winner} then compares the two point
+values alone.}
+
+\item{conf_level}{Coverage of the interval (default 0.90).}
+
+\item{seed}{Optional seed for the bootstrap.}
+
+\item{at}{Optional named list of values to price every policy at, e.g.
+\code{list(BOEKJAAR = 2024)}; see \code{\link[=premium_impact]{premium_impact()}}. The models price the
+data with these values; an old premium column is read as it is.}
 }
 \value{
-A list with \code{table} (per bin: exposure, the mean rate ratio, and
-the A/E of each model), \code{stats}, and \code{plot}. \code{stats$rate_level_change}
-is measured before any rebasing, so it reports the difference in rate
-level whether or not \code{rebase} is in force.
+A list with \code{table} (per bin: weight, the mean rate ratio, and
+the A/E of each model; the \code{Exposure} column holds whatever
+\code{weight_col} resolved to), \code{stats}, and \code{plot}.
+\code{stats$rate_level_change} is measured before any rebasing, so it
+reports the difference in rate level whether or not \code{rebase} is in
+force. \code{stats$mad_diff} is \code{mad_old - mad_new}, positive when the new
+model is closer to 1, \code{stats$mad_diff_ci} its interval, and
+\code{stats$winner} is \code{"new"}, \code{"old"}, \code{"inconclusive"} or \code{"tie"}.
 }
 \description{
 Sorts the portfolio by the ratio of the two predicted rates, bins it by
@@ -71,6 +101,23 @@ right.
 
 By default both sides are rebased to the same total, so the chart is
 about differentiation rather than rate level.
+
+The verdict compares the mean absolute distance of each A/E series from
+1 across the bins. On raw losses a few large claims decide those means:
+on a 16,000-policy holdout the verdict was "old" on the losses as
+recorded and "new" on the same losses capped. The difference
+\code{mad_old - mad_new} therefore gets a bootstrap interval, and \code{winner}
+names a model only when that interval excludes 0; otherwise it is
+\code{"inconclusive"}, with a warning when the ten largest records carry 10\%
+or more of \code{actual_col}. Policies are resampled with Poisson(1)
+counts within the bins cut on the full data, and with \code{rebase = TRUE}
+every replicate is rebased again.
+
+Bins hold equal \strong{weight}. That is the exposure, unless both sides are
+severity models: a severity model predicts a mean per claim, so it is
+weighted by claims, as in \code{\link[=model_lift]{model_lift()}}. A severity model on one side
+and a frequency or risk premium on the other is refused, because the
+ratio of a rate per claim to a rate per exposure unit compares nothing.
 }
 \seealso{
 \code{\link[=model_lift]{model_lift()}}, \code{\link[=premium_impact]{premium_impact()}}

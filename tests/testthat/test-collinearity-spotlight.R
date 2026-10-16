@@ -63,7 +63,35 @@ test_that("splines and rank deficiency do not empty the table", {
   v_rd <- suppressWarnings(glm_collinearity(m_rd))
   expect_gt(nrow(v_rd), 1)
   expect_true(all(is.finite(v_rd$GVIF_scaled)))
-  expect_warning(glm_collinearity(m_rd), "rank")
+  # the interaction and REGIO, which it contains, are reported, not flagged
+  expect_warning(expect_warning(glm_collinearity(m_rd), "rank"),
+                 "belong to an interaction")
+  expect_true(all(is.na(v_rd$Flag[v_rd$InInteraction])))
+  expect_setequal(v_rd$Term[v_rd$InInteraction], c("REGIO", "REGIO:LEEFTIJD"))
+})
+
+test_that("a GVIF that depends on the coding is not flagged", {
+  # Centring the numeric side of an interaction leaves the fit identical,
+  # and moves the GVIF of the factor's main effect, whose coefficients are
+  # then measured at another value of GEWICHT (DIAG-07)
+  m_a <- glm(AantalClaims ~ GEWICHT * REGIO + LEEFTIJD +
+               offset(log(Exposure)), family = poisson(), data = dc)
+  dc2 <- dc; dc2$GEWICHT <- dc2$GEWICHT - 1350
+  m_b <- update(m_a, data = dc2)
+  expect_equal(fitted(m_a), fitted(m_b), tolerance = 1e-8)
+  g_a <- suppressWarnings(glm_collinearity(m_a))
+  g_b <- suppressWarnings(glm_collinearity(m_b))
+  ga <- g_a$GVIF_scaled[g_a$Term == "REGIO"]
+  gb <- g_b$GVIF_scaled[g_b$Term == "REGIO"]
+  expect_gt(ga / gb, 2)
+  # so neither version flags the terms of the interaction, and a term
+  # outside it still gets its flag
+  int_terms <- c("GEWICHT", "REGIO", "GEWICHT:REGIO")
+  expect_setequal(g_a$Term[g_a$InInteraction], int_terms)
+  expect_true(all(is.na(g_a$Flag[g_a$Term %in% int_terms])))
+  expect_true(all(is.na(g_b$Flag[g_b$Term %in% int_terms])))
+  expect_identical(g_a$Flag[g_a$Term == "LEEFTIJD"], FALSE)
+  expect_warning(glm_collinearity(m_a), "belong to an interaction")
 })
 
 test_that("a model with fewer than two terms returns nothing", {
@@ -85,11 +113,26 @@ test_that("contributions sum to the portfolio change", {
   expect_true(all(c("ExposureShare", "Contribution") %in% names(imp$by_level)))
   expect_equal(sum(imp$by_level$ExposureShare), 1, tolerance = 1e-8)
 
-  # levels of one variable decompose the overall (rebased) change, which is
-  # zero on average by construction of the rebase
-  overall <- sum(imp$policy$ChangePct * imp$policy$Exposure) /
-             sum(imp$policy$Exposure)
-  expect_equal(sum(imp$by_level$Contribution), overall, tolerance = 1e-8)
+  # levels of one variable decompose the change in the total premium
+  # (RATE-04): exactly 0 after a rebase, the rate-level change without one
+  expect_equal(sum(imp$by_level$Contribution), 0, tolerance = 1e-8)
+  imp_nr <- premium_impact(dc, model_freq_new = m_new,
+                           old_premium_col = "HUIDIGE_PREMIE", by = "REGIO",
+                           rebase = FALSE)
+  expect_equal(sum(imp_nr$by_level$Contribution),
+               100 * imp_nr$stats$rate_change, tolerance = 1e-8)
+
+  # also when the old premium is not flat, which is where weighting the
+  # mean change by exposure did not add up
+  dc3 <- dc
+  dc3$HUIDIGE_PREMIE <- dc3$Exposure * 250 * ifelse(dc3$REGIO == "Stad", 1.3, 1)
+  imp3 <- premium_impact(dc3, model_freq_new = m_new,
+                         old_premium_col = "HUIDIGE_PREMIE", by = "REGIO")
+  expect_equal(sum(imp3$by_level$Contribution), 0, tolerance = 1e-8)
+  bl <- imp3$by_level
+  expect_equal(bl$Contribution, bl$PremiumShare * bl$TotalChangePct,
+               tolerance = 1e-8)
+  expect_equal(sum(bl$PremiumShare), 1, tolerance = 1e-8)
 })
 
 test_that("the spotlight reports a subset without filtering the book", {

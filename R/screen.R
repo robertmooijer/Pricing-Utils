@@ -104,7 +104,15 @@
 #'   small as `y ~ 1 + offset(log(Exposure))`. Poisson/quasipoisson count
 #'   models and Gamma log-link models are supported.
 #' @param features Candidate columns. `NULL` (default) uses every usable
-#'   column of the model's data except the response and the offset.
+#'   column of the model's data except the response, the offset, the prior
+#'   weights and the outcome columns `claims_col`, `loss_col` and
+#'   `exposure_col`. Offered the loss amount, a booster on a frequency
+#'   model finds that claims follow losses and ranks it first, which is
+#'   leakage rather than risk. Naming an outcome column here keeps it, with
+#'   a warning.
+#' @param exposure_col,claims_col,loss_col The outcome and volume columns
+#'   kept out of the default candidates (defaults `"Exposure"`,
+#'   `"AantalClaims"`, `"SCHADELAST"`), see [agg_all()].
 #' @param split Row shares for train / validation (early stopping) /
 #'   test (reporting). Must sum to 1.
 #' @param max_depth Maximum tree depth for the second booster (default 2,
@@ -160,7 +168,10 @@ screen_features <- function(model, features = NULL,
                             n_shap = 4000, cor_threshold = 0.95,
                             max_levels = 50, max_rows = Inf,
                             tree_method = "hist",
-                            nthread = NULL, seed = NULL) {
+                            nthread = NULL, seed = NULL,
+                            exposure_col = "Exposure",
+                            claims_col = "AantalClaims",
+                            loss_col = "SCHADELAST") {
 
   if (!requireNamespace("xgboost", quietly = TRUE))
     stop("screen_features: package 'xgboost' is required ",
@@ -227,7 +238,30 @@ screen_features <- function(model, features = NULL,
 
   # Candidate features ------------------------------------------------------
   drop <- unique(c(all.vars(formula(model)[[2]]), .offset_vars(model)))
-  if (is.null(features)) features <- setdiff(names(d), drop)
+  # [SCR-08]
+  # Outcome and volume columns are never candidates by default. Offered the
+  # loss amount, the booster on a frequency model finds that claims follow
+  # losses, ranks it first, and every verdict after that is about leakage
+  # instead of risk. The response and the offset were already out; the
+  # claim count, the loss amount, the exposure and the prior weights are
+  # out by name as well. Asked for explicitly, they stay, with a warning.
+  wvars   <- if (!is.null(model$call$weights)) all.vars(model$call$weights)
+             else character(0)
+  outcome <- setdiff(intersect(unique(c(claims_col, loss_col, exposure_col,
+                                        wvars)), names(d)), drop)
+  if (is.null(features)) {
+    features <- setdiff(names(d), c(drop, outcome))
+    if (length(outcome))
+      message("screen_features: outcome and volume column(s) left out of ",
+              "the candidates: ", paste(outcome, collapse = ", "), ".")
+  } else {
+    asked <- intersect(features, outcome)
+    if (length(asked))
+      warning("screen_features: ", paste(asked, collapse = ", "), " is an ",
+              "outcome or volume column; as a candidate it carries the ",
+              "response into the booster, and its importance says nothing ",
+              "about risk.", call. = FALSE)
+  }
   features <- setdiff(unique(features), drop)
   missing_f <- setdiff(features, names(d))
   if (length(missing_f)) {

@@ -13,9 +13,9 @@ glm_collinearity(model, threshold = 3)
 (default 3).}
 }
 \value{
-A data.frame with \code{Term}, \code{DF}, \code{GVIF}, \code{GVIF_scaled} and
-\code{Flag}, ordered by \code{GVIF_scaled}. Returns zero rows with a message
-when the model has fewer than two terms.
+A data.frame with \code{Term}, \code{DF}, \code{GVIF}, \code{GVIF_scaled},
+\code{InInteraction} and \code{Flag}, ordered by \code{GVIF_scaled}. Returns zero rows
+with a message when the model has fewer than two terms.
 }
 \description{
 Reports the generalised variance inflation factor per \strong{term}, not per
@@ -34,6 +34,15 @@ even though the model's overall predictions may be perfectly fine.
 This is the model-level counterpart of the near-duplicate warning in
 \code{\link[=screen_features]{screen_features()}}: that one catches correlated \emph{candidates} before
 they go in, this one catches them once they are both in the model.
+
+A term that is part of an \strong{interaction}, either the interaction itself
+or a main effect it contains, is reported but not flagged. Its GVIF
+depends on how the variables are coded rather than on the data: in a
+model with the interaction \code{pmin(LEEFTIJD, 30):STEDELIJKHEID}, writing
+the age part as \code{pmin(LEEFTIJD, 30) - 30} moved the scaled GVIF of
+\code{STEDELIJKHEID} from 14.12 to 1.11, with the fitted values identical to
+2e-14. \code{Flag} is \code{NA} for those terms and \code{InInteraction} says which
+they are.
 }
 \seealso{
 \code{\link[=glm_diagnostics]{glm_diagnostics()}}

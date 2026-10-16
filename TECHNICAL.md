@@ -38,6 +38,7 @@ Contents
    - [OFF: offsets and the link](#off-offsets-and-the-link)
    - [RT: rating table](#rt-rating-table)
    - [MV: merged and grouped columns](#mv-merged-and-grouped-columns)
+   - [SCORE: data a model was not fitted on](#score-data-a-model-was-not-fitted-on)
    - [RATE: premium impact and lift](#rate-premium-impact-and-lift)
    - [AE: actual versus expected](#ae-actual-versus-expected)
    - [INT: interactions](#int-interactions)
@@ -77,7 +78,7 @@ calls: every function takes models and data and returns a value.
 | `R/rating-plot.R` | `make_rating_plot()` | none | plots one variable or interaction of a rating table |
 | `R/export.R` | `export_rating_table()` | `.numeric_levels()` | formatted `.xlsx` with an Overview, a Tariff lookup sheet, one sheet per variable |
 | `R/impact.R` | `premium_impact()` | none | per-policy dislocation, rebase, contribution, spotlight |
-| `R/lift.R` | `model_lift()`, `double_lift()` | none | lift chart, Gini, Lorenz curve, double lift |
+| `R/lift.R` | `model_lift()`, `double_lift()` | none | lift chart, Gini with a bootstrap interval, Lorenz curve, double lift with an interval behind its verdict |
 | `R/ae.R` | `plot_glm_predictor()` | none | actual versus expected per level or bin, in-sample or on new data, levels or ratio |
 | `R/pdp.R` | `make_pdp()` | none | partial dependence on the response scale with an observed overlay |
 | `R/agg.R` | `agg_all()` | none | raw rows to frequency and severity per level |
@@ -103,10 +104,17 @@ intercepts are predictions of the base row with the whole offset taken out
 (`.predict_no_offset()`).
 
 **Rates for comparison.** `premium_impact()` and `double_lift()` call
-`.old_new_rates()`, which calls `.model_rate()` per model; `model_lift()`
-calls `.model_rate()` directly. `.model_rate()` asks `.offset_split()` which
-offset expressions to subtract and calls `.predict_no_offset()` with only
-those.
+`.old_new_rates()`, which applies `at` (`.apply_at()`) and calls
+`.model_rate()` per model; `model_lift()` calls `.apply_at()` and
+`.model_rate()` directly. `.model_rate()` first names any value the model
+was not fitted on (`.unseen_levels()`, an error) and any numeric value
+outside the fitted range (`.range_warning()`), then asks `.offset_split()`
+which offset expressions to subtract and calls `.predict_no_offset()` with
+only those.
+
+**Models read as fitted with na.omit.** Every function that mixes
+`residuals()`, `fitted()` or `predict()` with the model frame first calls
+`.as_na_omit()` on its local copy of the model (DATA-06).
 
 **Actual versus expected.** `plot_glm_predictor()` takes its rows from
 `.glm_training_data()` (in-sample) or `.glm_newdata_parts()` (new data).
@@ -127,10 +135,17 @@ All in `R/utils-internal.R` unless stated otherwise.
 |---|---|---|
 | `.check_cols(d, cols, fn)` | stop with a named message when columns are missing | most exported functions |
 | `.as_df(x)` | normalise data.table and tibble to a plain data.frame | most exported functions |
-| `.glm_training_data(model, fn)` | model frame, `model$data` aligned by row name, prior weights, offset | `ae.R`, `diagnostics.R`, `lift.R`, `pdp.R`, `qq-influence.R`, `screen.R`, `.glm_ae_parts()` |
+| `.model_data(model)` | the data a model was fitted on: `model$data`, or the call's `data` evaluated where the formula was written | `.glm_training_data()`, `.source_kind()`, `.grouping_column()`, `pricing_report()` |
+| `.as_na_omit(model)` | read a model fitted with `na.exclude` as if fitted with `na.omit` | every function that mixes residuals or fitted values with the model frame |
+| `.glm_training_data(model, fn)` | model frame, the training data aligned by row name, prior weights, offset | `ae.R`, `diagnostics.R`, `lift.R`, `pdp.R`, `qq-influence.R`, `screen.R`, `.glm_ae_parts()` |
 | `.glm_newdata_parts(model, newdata, fn)` | the same pieces evaluated on other data | `plot_glm_predictor()` |
 | `.check_range(rng, fn, arg)` | validate `c(lo, hi)` axis ranges | every plot with `y_range`, `x_range` or `z_range` |
-| `.coerce_like(vals, template)` | coerce grid values to a column's type and factor levels | `make_rating_table()`, `make_pdp()` |
+| `.coerce_like(vals, template)` | coerce grid values to a column's type and factor levels; a logical stays logical | `make_rating_table()`, `make_pdp()`, `.apply_at()` |
+| `.unseen_levels(model, data)` | values of a factor term the model was not fitted on, per column, with a row mask | `.model_rate()`, `.glm_newdata_parts()`, `.predictable_rows()`, `make_rating_table()` |
+| `.unseen_message(un, label, fn, at_hint)` | the error text for those values | `.model_rate()`, `.glm_newdata_parts()` |
+| `.model_label(label)` | "model" or "frequency model" in a message | `.unseen_message()`, `.range_warning()` |
+| `.range_warning(model, data, label, fn)` | warn when numeric predictors leave the fitted range | `.model_rate()` |
+| `.apply_at(data, at, fn)` | set columns to one value for every row (`at = list(BOEKJAAR = 2024)`) | `.old_new_rates()`, `model_lift()` |
 | `.rhs_vars(model)` | variables on the right-hand side, response excluded | many |
 | `.glm_ae_parts(model, fn)` | actual, expected, volume and claim weight per fitted row | `plot_residual_heatmap()`, `detect_interactions()` |
 | `.glm_var_values(parts, var, fn)` | a variable aligned with the fitted rows | `interactions.R` |
@@ -144,11 +159,22 @@ All in `R/utils-internal.R` unless stated otherwise.
 | `.offset_is_log(model)` | is every offset a `log()` | `ae.R`, `pdp.R`, `.glm_ae_parts()` |
 | `.offset_vars(model)` | variables appearing in any offset | many |
 | `.default_nthread()` | thread count respecting R CMD check and `OMP_THREAD_LIMIT` | `screen_features()` |
-| `.model_rate(model, data, exposure_col, fn, keep_offsets)` | predicted rate per unit of exposure | `model_lift()`, `.old_new_rates()` |
-| `.old_new_rates(...)` | old and new rate per policy from models or a premium column | `premium_impact()`, `double_lift()` |
+| `.model_rate(model, data, exposure_col, fn, keep_offsets, label)` | predicted rate per unit of exposure, after the unseen-level and range checks | `model_lift()`, `.old_new_rates()` |
+| `.old_new_rates(..., at, divisor_col)` | old and new rate per policy from models or a premium column | `premium_impact()`, `double_lift()` |
 | `.check_ae_scale(actual, predicted, fn, actual_col)` | warn when the overall A/E suggests mismatched units | `model_lift()`, `double_lift()` |
 | `.exposure_bins(score, weight, n_bins, fn)` | equal-weight bins ordered by a score | `model_lift()`, `double_lift()` |
 | `.gini_exposure(score, actual, weight)` | exposure-weighted Gini | `model_lift()` |
+| `.gini_ordered(w, a)` | the same on vectors already in score order | `.gini_exposure()`, `.gini_boot()` |
+| `.gini_boot(score, actual, weight, n_boot, conf)` | Poisson-weight bootstrap interval for the Gini | `model_lift()` |
+| `.top_share(actual, k)` | share of the total held by the `k` largest records | `.large_loss_note()` |
+| `.large_loss_note(actual, actual_col)` | the sentence naming large losses, when the ten largest carry 10% or more | `model_lift()`, `double_lift()` |
+| `.check_boot(n_boot, conf_level, fn)` | validate the bootstrap arguments | `model_lift()`, `double_lift()` |
+| `.drop_reasons(flags)` | count dropped rows per reason | `premium_impact()`, `model_lift()`, `double_lift()` |
+| `.nil_claims_warning(...)` | warn when claims without payment make frequency x severity too high | `make_rating_table()`, `model_lift()` |
+| `.year_warning(models, year_col, at, fn)` | warn when a model prices each policy at its own accounting year | `premium_impact()` |
+| `.predictable_rows(model, newd)` | rows of a prediction frame without an unseen level | `make_rating_table()` |
+| `.dev_resid_moments(model)` | mean and variance of each row's deviance residual under the fitted family | `plot_glm_residuals()` |
+| `.nb_theta(model)` | theta of a negative binomial fit, or `NULL` | `.dev_resid_moments()`, `.quantile_residuals()` |
 | `.nice_step(rng, n, integer_data)` | a 1, 2 or 5 times 10^k step | `make_rating_table()` |
 | `.list_values(uv, n, integer_data)` | list a whole-number column value by value | `make_rating_table()` |
 | `.step_grid(lo, hi, step, base)` | grid on whole multiples of the step, base included | `make_rating_table()` |
@@ -173,6 +199,7 @@ All in `R/utils-internal.R` unless stated otherwise.
 | `htmltools` | Suggests | `pricing_report()` only |
 | `xgboost` | Suggests | `screen_features()` only |
 | `statmod` | Suggests | tests only: the reference for quantile residuals |
+| `MASS` | Suggests | tests only: a `glm.nb()` fit, which keeps no `model$data` |
 | `tibble`, `testthat` | Suggests | tests only |
 
 Optional packages are checked with `requireNamespace()` at the top of the
@@ -231,8 +258,9 @@ never a line through categories.
 
 **CONV-08 Randomness.** Functions with a `seed` argument
 (`plot_glm_qq()`, `plot_glm_influence()`, `detect_interactions()`,
-`screen_features()`) call `set.seed()` and so change the global random
-state. Without `seed` they use whatever state there is.
+`screen_features()`, `model_lift()`, `double_lift()`) call `set.seed()` and
+so change the global random state. Without `seed` they use whatever state
+there is.
 
 **CONV-09 Documentation style.** The README is in English and uses no em
 dashes. Each register entry here is written so it can be read on its own.
@@ -303,8 +331,9 @@ dashes. Each register entry here is written so it can be read on its own.
 
 #### OFF-05 Rates for comparison keep every offset except the exposure
 
-- **Decision.** In `premium_impact()`, `model_lift()` and `double_lift()`,
-  only the offset expressions that mention `exposure_col` are subtracted.
+- **Decision.** In `premium_impact()`, `model_lift()`, `double_lift()` and,
+  since PDP-05, `make_pdp()`, only the offset expressions that mention
+  `exposure_col` are subtracted.
   Any other offset, typically a bonus-malus scale, stays in the rate.
   `keep_offsets = FALSE` subtracts everything. Two cases fall back to
   subtracting everything: a model whose offset does not mention
@@ -335,24 +364,27 @@ dashes. Each register entry here is written so it can be read on its own.
 - **History.** Before commit `626bb2a` every offset was removed in these
   three functions. Results change only for models with a second offset.
 
-#### OFF-06 Rating table and PDP remove the whole offset
+#### OFF-06 The rating table removes the whole offset
 
 - **Decision.** The rating table's base row holds every offset variable at
-  1 and its intercepts are computed with the whole offset subtracted; the
-  PDP subtracts the whole offset too. Both are therefore at BM = 1.
+  1 and its intercepts are computed with the whole offset subtracted, so
+  the table is at BM = 1.
 - **Why.** A tariff table describes a base policy, and the BM discount is
   applied per policy on top, the same way the exposure is. A BM factor is
-  not estimated, so it has no block in the table. The PDP shows a partial
-  effect, which is cleaner without a policy-specific discount mixed into
-  the average.
+  not estimated, so it has no block in the table.
 - **Where.** `R/rating-table.R`, `base_value_raw()` (offset variables
-  return 1) and `intercept_val()`; `R/pdp.R`, `make_pdp()`.
+  return 1) and `intercept_val()`.
 - **Consequence.** A premium built from the table is
   `intercept_premium x factors x BM`. Verified per policy against
   `predict()` with Exposure = 1 and the policy's BM.
 - **Pinned by.** `test-offset-link.R`: "the rating table intercept follows
   the model's own offset", "a second offset does not end up on the exposure
   axis" (premium chain with BM on top).
+- **History.** Until the review fixes of October 2026 the PDP removed the
+  whole offset too, on the argument that a partial effect is cleaner
+  without a policy-specific discount. It was then drawn against an
+  observed line at each policy's own BM and sat 35% above it on a correct
+  model. It now keeps the BM (PDP-05).
 
 #### OFF-07 A non-log link is tolerated, with a warning
 
@@ -420,7 +452,8 @@ dashes. Each register entry here is written so it can be read on its own.
 #### RT-02 The base point
 
 - **Decision.** Categorical: the first level of the model's `xlevels`, or
-  with `base_level = "exposure"` the level with the most exposure.
+  with `base_level = "exposure"` the level with the most exposure; the
+  accounting year (`year_col`) its latest level (RT-15).
   Continuous: the median, snapped onto the grid. Offset variables: 1. A
   `base` argument overrides any of these per variable; a categorical value
   must be an existing level, a continuous value is used exactly as given
@@ -502,10 +535,14 @@ dashes. Each register entry here is written so it can be read on its own.
 #### RT-07 Thin cells
 
 - **Decision.** `IsThin = ClaimCount < min_claims` (default 30). Only thin
-  categorical main-effect levels raise a warning.
+  categorical main-effect levels raise a warning, which names the levels
+  without any claim separately. The flag stays a volume flag; the
+  precision of a factor is in its standard error (RT-12).
 - **Why.** A GLM applies no shrinkage to a categorical level, so its factor
   rests on those few claims. Thin tail points of a continuous grid are
-  normal and would make the warning noise.
+  normal and would make the warning noise. A level without claims gets a
+  frequency factor that is the fit running towards zero, not an
+  estimate.
 - **Where.** `R/rating-table.R`, the thin-cell block.
 - **Pinned by.** `test-rating-table.R`: "the thin-cell column is correct".
 
@@ -533,6 +570,124 @@ dashes. Each register entry here is written so it can be read on its own.
   `base_df_for()`.
 - **Pinned by.** `test-rating-table.R`: "round large levels are not written
   in scientific notation"; `test-awkward-names.R`.
+
+#### RT-10 A level a model was not fitted on is an empty cell
+
+- **Decision.** A level that is in `data` but not in a model's `xlevels`
+  keeps its row: that model's factor is `NA` there, and so is
+  `Factor_Premium`, with one warning per model naming the cells. A base
+  row the model does not know is an error, raised once before any factor
+  is computed, since every factor is a ratio against it.
+- **Why.** A level with exposure and no claims is the usual case: the
+  frequency model knows it, the severity data has no row for it. Predicting
+  the whole variable failed on that one level, and the variable then left
+  the table with a warning, so the frequency factors of every other level
+  went with it.
+- **Where.** `R/rating-table.R`, `predict_rows()`, the base-row check, the
+  NA-cell warning; `R/utils-internal.R`, `.predictable_rows()`.
+- **Evidence.** The review's WA book: Waterstof with 121 exposure and no
+  claims dropped `BRANDSTOF` from the table entirely.
+- **Pinned by.** `test-review-findings.R`: "a level without claims does not
+  drop the variable from the table".
+
+#### RT-11 A term that bands a column is read on its bands
+
+- **Decision.** When a model's factor levels are not values of the column
+  behind them, as with `cut(LEEFTIJD, ...)` or an `ifelse()`, the variable
+  is reported on those levels. Each level is put into the prediction frame
+  as the most frequent value of the column within it, which falls in it by
+  definition, and the volumes are counted on the evaluated term.
+  `factor(BOEKJAAR)` needs none of this, since `"2021"` is a year.
+- **Why.** Predicting on the label put `"(24,40]"` into `LEEFTIJD`, which
+  gave `NA` in every row, the intercept included, because every prediction
+  shares the base row.
+- **Where.** `R/rating-table.R`, the decoder block, `to_model()`,
+  `row_level()`.
+- **Evidence.** Intercept and every factor `NA` before; afterwards the
+  reconstruction of `predict()` holds to 2e-16.
+- **Pinned by.** `test-review-findings.R`: "cut() in the formula does not
+  give a table full of NA".
+
+#### RT-12 Standard errors of the factors
+
+- **Decision.** `SE_Frequency` and `SE_Severity` hold the standard error of
+  `log(Factor)` in each row, `sqrt(d' V d)` with `d` the difference of the
+  row's and the base's model-matrix rows and `V` the model's covariance
+  matrix. 0 at the base and for a variable the model does not use, `NA`
+  where there is no factor or the link is not log. On an interaction row
+  it belongs to the joint relativity against the base cell.
+- **Why.** The model matrix is built exactly as `predict()` builds it, so
+  this holds for splines, inline factors and interactions alike. A volume
+  flag cannot say how precise a factor is: a level with 31 claims passes
+  `min_claims = 30` with a standard error of 0.18, a 95% interval of x0.70
+  to x1.42.
+- **Where.** `R/rating-table.R`, `se_of()`.
+- **Evidence.** For a categorical level against the reference the column
+  equals the coefficient's own standard error (0.07675 for one region);
+  Waterstof on the review's book: 31 claims, estimate 1.167 against a true
+  1.000, `IsThin = FALSE`.
+- **Limitation.** `vcov()` of a Poisson model assumes a dispersion of 1;
+  fit a quasipoisson for standard errors that carry the overdispersion.
+- **Pinned by.** `test-review-findings.R`: "the rating table carries
+  standard errors of its factors".
+
+#### RT-13 Claims without payment are pointed out
+
+- **Decision.** When the frequency response counts `claims_col` and at
+  least 1% of those claims sit in records with `loss_col = 0`, a warning
+  says that frequency x severity overstates the risk premium by about that
+  share. Raised by `make_rating_table()` and `model_lift()`.
+- **Why.** A Gamma severity cannot take a zero, so the zero amounts leave
+  the severity data while the frequency model still counts them. Only
+  records whose every claim is nil are visible, so the share is a lower
+  bound.
+- **Where.** `R/utils-internal.R`, `.nil_claims_warning()`.
+- **Evidence.** With 15% nil claims: predicted over actual losses 1.153.
+- **Pinned by.** `test-review-findings.R`: "claims without payment are
+  pointed out".
+
+#### RT-14 A logical predictor stays logical
+
+- **Decision.** Grid values for a logical column are coerced back to
+  `TRUE` / `FALSE`.
+- **Why.** `predict()` refuses a character where the model was fitted on a
+  logical, so a column such as `GARAGE = TRUE` broke the table.
+- **Where.** `R/utils-internal.R`, `.coerce_like()`.
+- **Pinned by.** `test-review-findings.R`: "a logical predictor does not
+  break the table".
+
+#### RT-15 The accounting year sits at its latest level
+
+- **Decision.** When a model uses `year_col` (default `"BOEKJAAR"`), its
+  default base is the latest year, for a `factor(BOEKJAAR)` as for a
+  numeric trend term. `base` still overrides it; `year_col = NULL` returns
+  to the general rule.
+- **Why.** The intercept is then the current price level instead of the
+  oldest one, and the year factors say how much cheaper the past was. The
+  other factors do not change.
+- **Where.** `R/rating-table.R`, `base_value_raw()`, `grid_of()`,
+  `latest_of()`.
+- **Evidence.** On the review's WA book the premium intercept was 207.2 at
+  the first year and 508.9 at the latest (with the region base moving as
+  well).
+- **Pinned by.** `test-review-findings.R`: "the accounting year sits at its
+  latest level by default"; `test-rating-table.R`: "intercept is per unit
+  of exposure".
+
+#### RT-16 Trimming leaves the interaction slices alone
+
+- **Decision.** `trim` keeps policies outside the trimmed range out of the
+  volumes of a grid that spans that range (RT-05), but not out of the three
+  slices of a continuous group variable in an interaction.
+- **Why.** The slices stand for the whole distribution. Cutting at the
+  outer slices threw away everything below the 10% and above the 90%
+  quantile.
+- **Where.** `R/rating-table.R`, `cell_index(drop_outside = FALSE)` in the
+  interaction block.
+- **Evidence.** The review's book with `trim = c(0.005, 0.995)`: 24,815
+  exposure in the main effect against 19,992 in the interaction cells.
+- **Pinned by.** `test-review-findings.R`: "trim does not take exposure out
+  of the slices of a group variable".
 
 ### MV: merged and grouped columns
 
@@ -686,6 +841,42 @@ dashes. Each register entry here is written so it can be read on its own.
   `predict()` after `add_groupings()` equals the rating table rebuilt with
   the same declaration, for every policy.
 
+### SCORE: data a model was not fitted on
+
+#### SCORE-01 A value the model never saw is named before predict()
+
+- **Decision.** Before scoring, every factor term of the model is evaluated
+  on the data and compared with its `xlevels` (`.unseen_levels()`). A value
+  the model does not know stops the function with the column, the values
+  and their row count, and the advice to map them or leave the rows out;
+  where the function has `at`, also to price a later year at the latest
+  known one. Used by `.model_rate()` (so `premium_impact()`, `model_lift()`,
+  `double_lift()`) and by `plot_glm_predictor(data = )`. The rating table
+  turns the same check into empty cells (RT-10).
+- **Why.** `predict()` raised "factor has new levels" from inside the
+  offset evaluation, and the message then blamed the offset.
+- **Where.** `R/utils-internal.R`, `.unseen_levels()`, `.unseen_message()`,
+  `.model_rate()`, `.glm_newdata_parts()`.
+- **Evidence.** The review: scoring 2025 gave "the model has an offset that
+  could not be evaluated on this data ... factor factor(BOEKJAAR) has new
+  level 2025".
+- **Pinned by.** `test-review-findings.R`: "an unknown level at scoring is
+  not reported as an offset problem", "at prices every policy at one
+  accounting year"; `test-agg-plots.R`: "unusable monitoring data is
+  refused rather than guessed at".
+
+#### SCORE-02 Scoring outside the fitted range is said once
+
+- **Decision.** A numeric predictor with values outside the range of the
+  model's training data raises one warning per call, with the row count
+  and the range. A column the model turns into a factor is left to
+  SCORE-01.
+- **Why.** `predict()` extrapolates without a word: a spline linearly on
+  the link scale beyond its last knot, a log term without limit.
+- **Where.** `R/utils-internal.R`, `.range_warning()`.
+- **Pinned by.** `test-review-findings.R`: "scoring outside the fitted
+  range is pointed out".
+
 ### RATE: premium impact and lift
 
 #### RATE-01 A rate is the product of the models, per unit of exposure
@@ -699,7 +890,11 @@ dashes. Each register entry here is written so it can be read on its own.
 - **Decision.** `old_premium_basis = "amount"` divides by `exposure_col`
   (an earned premium for the record); `"rate"` takes it as a premium per
   unit of exposure. It must be on the footing of the kept offsets (OFF-05).
-- **Where.** `R/utils-internal.R`, `.old_new_rates()`.
+  `double_lift()` divides by its weight column instead, which is the
+  exposure unless both sides are severity models (RATE-12), so that rate x
+  weight gives the amount back on both sides. An old premium column is
+  read as it is: `at` (RATE-10) only changes what the models score.
+- **Where.** `R/utils-internal.R`, `.old_new_rates()`, `divisor_col`.
 - **Pinned by.** `test-impact.R`: "rebase separates rate-level change from
   dislocation".
 
@@ -718,27 +913,49 @@ dashes. Each register entry here is written so it can be read on its own.
 #### RATE-04 Contribution, not mix
 
 - **Decision.** Per level of a `by` column:
-  `Contribution = ExposureShare x MeanChangePct`, which sums to the
-  portfolio change.
+  `Contribution = 100 x (NewPremium - OldPremium) / old total premium`,
+  which is `PremiumShare x TotalChangePct`. The contributions of one
+  variable sum to the change in the total premium: exactly 0 after a
+  rebase, the rate-level change without one. `MeanChangePct` (what a
+  policy in the level sees on average) is reported next to it, and so are
+  `OldPremium`, `NewPremium`, `PremiumShare` and `TotalChangePct`. The
+  spotlight's contribution is computed the same way.
 - **Why.** Old and new are compared on the same policies, so there is no
   mix effect to isolate; contribution answers which segment drives the
-  change.
-- **Where.** `R/impact.R`.
+  change. A segment's part of the total is its premium change, not its
+  exposure times its mean percentage, because a percentage on a cheap
+  policy moves less money than the same percentage on an expensive one.
+- **Where.** `R/impact.R`, `by_level` and the spotlight block.
+- **Evidence.** On the review's WA book after a rebase (total premium
+  change +0.000%), the old definition summed to -4.008% for every `by`
+  variable, the exposure-weighted mean change. Per region the two
+  definitions disagreed by up to 2.1 points (Randstad +2.715 against
+  +4.777).
 - **Pinned by.** `test-collinearity-spotlight.R`: "contributions sum to the
-  portfolio change".
+  portfolio change"; `test-review-findings.R`: "premium_impact
+  contributions add up to the change in total premium".
+- **History.** Until the review fixes of October 2026,
+  `Contribution = ExposureShare x MeanChangePct`. That sums to the
+  exposure-weighted mean change, which equals the change in total premium
+  only when the old premium is flat per unit of exposure.
 
 #### RATE-05 Spotlight, dropped rows, histogram
 
 - **Decision.** A spotlight is evaluated against `data` (or taken as a
-  logical vector) and reported after the book-level rebase. Rows with a
-  non-finite or non-positive premium or exposure are dropped with a
-  warning. The histogram is pre-binned into 60 bars.
+  logical vector) and reported after the book-level rebase. Rows without a
+  usable new or old rate, a positive weight or an actual value are dropped
+  with a warning that counts them per reason (`.drop_reasons()`), in
+  `premium_impact()`, `model_lift()` and `double_lift()`. A row can count
+  under more than one reason. The histogram is pre-binned into 60 bars.
 - **Why.** The spotlight shows how a segment moves relative to the book.
-  Pre-binning keeps the widget small: a plotly histogram would embed every
-  policy.
-- **Where.** `R/impact.R`.
+  One count for every reason reported a missing loss amount as an exposure
+  problem. Pre-binning keeps the widget small: a plotly histogram would
+  embed every policy.
+- **Where.** `R/impact.R`; `R/lift.R`; `R/utils-internal.R`,
+  `.drop_reasons()`.
 - **Pinned by.** `test-collinearity-spotlight.R`: "the spotlight reports a
-  subset without filtering the book", "spotlight input is validated".
+  subset without filtering the book", "spotlight input is validated";
+  `test-review-findings.R`: "dropped rows are reported per reason".
 
 #### RATE-06 Lift bins hold equal exposure
 
@@ -770,20 +987,107 @@ dashes. Each register entry here is written so it can be read on its own.
   overall A/E outside 0.5 to 2 raises a warning about mismatched units.
 - **Why.** The Gini measures ordering only, not calibration. A wildly off
   A/E nearly always means counts were compared with amounts.
-- **Where.** `R/utils-internal.R`, `.gini_exposure()`,
+- **Where.** `R/utils-internal.R`, `.gini_exposure()`, `.gini_ordered()`,
   `.check_ae_scale()`.
 - **Pinned by.** `test-lift.R`: "a portfolio without losses gives NA rather
   than NaN for the Gini", "mismatched units are caught".
 
 #### RATE-09 Double lift
 
-- **Decision.** Bins are ordered by the new/old rate ratio; the winner is
-  the model with the smaller mean absolute distance of its A/E from 1, with
-  a tie when the two are equal.
+- **Decision.** Bins are ordered by the new/old rate ratio. Each model is
+  scored by the mean absolute distance of its A/E from 1 across the bins
+  (`mad_new`, `mad_old`). `winner` is `"tie"` when the two are equal;
+  otherwise it names a model only when the bootstrap interval of
+  `mad_old - mad_new` (RATE-11) excludes 0, and is `"inconclusive"` when
+  it does not. With `n_boot = 0` the point values decide, as they did
+  before the interval existed.
+- **Why.** The point comparison is decided by a few large claims: on the
+  review's 16,000-policy holdout it said "old" on the losses as recorded
+  (0.543 against 0.405) and "new" on the same losses capped at 50,000
+  (0.222 against 0.271). A verdict that flips with the treatment of ten
+  claims is not a verdict.
 - **Where.** `R/lift.R`, `double_lift()`.
 - **Pinned by.** `test-lift.R`: "double lift prefers the model that is
   right where they differ", "double lift against itself shows no winner and
-  a flat A/E".
+  a flat A/E"; `test-review-findings.R`: "the double lift names a winner
+  only when the interval excludes 0".
+- **History.** Until the review fixes of October 2026 the winner was the
+  smaller point value, always.
+
+#### RATE-10 Pricing at one accounting year
+
+- **Decision.** `premium_impact()`, `model_lift()` and `double_lift()` take
+  `at`, a named list of values every policy is priced at, for example
+  `at = list(BOEKJAAR = 2024)`. It is applied to the data the models score
+  and never to an old premium column. Each value must be valid for its
+  column (`.coerce_like()`); a level the model does not know is refused by
+  SCORE-01. `premium_impact()` warns when the new models use `year_col`
+  against an old premium column, or when only one of two model sets uses
+  it, and `at` does not set it. The lifts do not warn.
+- **Why.** With the accounting year as a rating factor, every policy is
+  priced at the level of its own historic year, and against a current
+  premium that mixes inflation into the dislocation. Two model sets that
+  both use the year price each policy at the same year on both sides,
+  which is like for like. A lift compares with the claims of each
+  policy's own year, which is exactly what pricing at its own year does.
+- **Where.** `R/utils-internal.R`, `.apply_at()`, `.year_warning()`,
+  `.old_new_rates()`; `R/impact.R`; `R/lift.R`.
+- **Evidence.** On the review's WA book, with `BOEKJAAR` in the frequency
+  model: a rate-level change of +11.1% with every policy at its own year,
+  +34.7% with every policy at 2024.
+- **Pinned by.** `test-review-findings.R`: "at prices every policy at one
+  accounting year"; `test-impact.R`: "rebase separates rate-level change
+  from dislocation" (the warning).
+
+#### RATE-11 Bootstrap intervals for the Gini and the double-lift verdict
+
+- **Decision.** `model_lift()` reports `gini_ci`, a bootstrap interval for
+  the Gini (`n_boot = 200`, `conf_level = 0.90`), and `double_lift()` one
+  for `mad_old - mad_new`. Both resample policies with Poisson(1) counts,
+  the large-sample stand-in for resampling with replacement, so the book is
+  sorted once (`.gini_boot()`) or the bins are kept as cut on the full data
+  and every replicate reweights the policies within them (rebased again
+  when `rebase = TRUE`). The interval is in the title and the return value.
+  A warning is raised only when large losses are the reason: the ten
+  largest records carry 10% or more of `actual_col` (`.large_loss_note()`)
+  and, for the Gini, the interval is wider than half the Gini and than
+  0.05; for the double lift, the verdict is inconclusive.
+- **Why.** A Gini on raw losses moves with a handful of large claims, and
+  so does the double-lift verdict (RATE-09). Capping the losses is the
+  remedy for that, and the warning says so. A wide interval on a small book
+  has no such remedy; warning about it fired on an ordinary frequency lift
+  of 20,000 policies and was noise.
+- **Where.** `R/utils-internal.R`, `.gini_boot()`, `.gini_ordered()`,
+  `.top_share()`, `.large_loss_note()`, `.check_boot()`; `R/lift.R`.
+- **Evidence.** The review's 16,000-policy holdout: Gini 0.230, 90%
+  interval 0.143 to 0.326 (0.133 to 0.302 for the true risk premium), so
+  the model and the truth could not be told apart on it.
+- **Limitation.** The interval resamples policies only. The models are
+  held fixed, so an in-sample interval ignores that they were fitted on
+  the same rows.
+- **Pinned by.** `test-review-findings.R`: "model_lift reports a bootstrap
+  interval around the Gini", "large losses that decide the Gini or the
+  verdict are named", "the double lift names a winner only when the
+  interval excludes 0".
+
+#### RATE-12 The double-lift weight follows the models
+
+- **Decision.** `double_lift()` resolves `weight_col = NULL` the way
+  `model_lift()` does (RATE-07): `claims_col` when both sides are severity
+  models, otherwise `exposure_col`. The bins hold equal weight, the
+  `Exposure` column of the table holds the weight, and an old premium
+  amount is divided by it (RATE-02). A severity model on one side and a
+  frequency or risk premium on the other is refused.
+- **Why.** A severity predicts a mean per claim. Weighted by exposure, the
+  predicted and actual totals do not reconcile, and the A/E per bin says
+  more about claim frequency than about severity. The ratio of a rate per
+  claim to a rate per exposure unit orders the book by neither tariff.
+- **Where.** `R/lift.R`, `double_lift()`.
+- **Evidence.** Two severity models on the review's claim data, weighted
+  by exposure: the old model's A/E per bin ran from 0.76 to 1.50.
+- **Pinned by.** `test-review-findings.R`: "a double lift between two
+  severity models is weighted by claims", "a severity model against a
+  frequency model is refused".
 
 ### AE: actual versus expected
 
@@ -832,8 +1136,8 @@ dashes. Each register entry here is written so it can be read on its own.
 - **Decision.** With `data`, the comparison runs on those rows. The
   response, weights and offsets are re-evaluated on them; rows with a
   missing value in a model variable are dropped as `glm()` would; a level
-  the model never saw is an error; the dispersion behind the bars is the
-  fitted model's.
+  the model never saw is an error that names it (SCORE-01); the dispersion
+  behind the bars is the fitted model's.
 - **Why.** Recycling the fitted weights would pair one period's claim
   counts with another's rows.
 - **Where.** `R/utils-internal.R`, `.glm_newdata_parts()`; `R/ae.R`.
@@ -878,14 +1182,20 @@ dashes. Each register entry here is written so it can be read on its own.
 
 - **Decision.** A/E per cell is `sum(actual) / sum(expected)`. Cells with
   fewer than `min_claims` claims are left uncoloured and marked. The scale
-  diverges around 1 with a neutral midpoint.
+  diverges around 1 with a neutral midpoint. When every cell is thin, the
+  colour layer is left out, with a warning, and the crosses with their
+  tooltips are the plot.
 - **Why.** A thin cell's A/E is noise, and colouring it would make it the
-  loudest thing on the plot.
+  loudest thing on the plot. plotly cannot build a heatmap whose values are
+  all `NA`, whatever its colour range: it failed with "Wasn't able to
+  determine range of domain", and on a 400-policy book that took the whole
+  report down.
 - **Where.** `R/interactions.R`, `plot_residual_heatmap()`,
   `.ta_diverging`.
 - **Pinned by.** `test-interactions.R`: "plot_residual_heatmap returns a
   plot plus its cell table", "thin cells are not coloured and z_range is
-  validated".
+  validated"; `test-review-findings.R`: "a heatmap with every cell thin
+  still builds".
 
 #### INT-03 The interaction statistic
 
@@ -893,8 +1203,8 @@ dashes. Each register entry here is written so it can be read on its own.
   margins (iterative proportional fitting, 50 iterations, tolerance 1e-9),
   and the likelihood-ratio deviance against the saturated table is the
   statistic. For Poisson counts the null comes from `n_sim` simulations
-  under the raked expected; otherwise from a chi-square scaled by the
-  Pearson dispersion.
+  under the raked expected, scaled for overdispersion (INT-05); otherwise
+  from a chi-square scaled by the Pearson dispersion.
 - **Why.** Raking removes main-effect misfit first, so what remains is
   interaction. The deviance is unreliable in sparse tables, hence the
   simulation where the response allows it.
@@ -912,13 +1222,43 @@ dashes. Each register entry here is written so it can be read on its own.
 - **Why.** Significant and material are different questions.
 - **Where.** `R/interactions.R`.
 
+#### INT-05 The simulated null carries the overdispersion
+
+- **Decision.** For count models the deviance is divided by the dispersion
+  of a cell total, `phi = sum((y - mu)^2) / sum(mu) x n / df`, and the
+  simulation draws Poisson counts with means `E / phi`. A dispersion below 1
+  is left at 1. The value is in the `Dispersion` column, and a message
+  names it from 1.2 upwards.
+- **Why.** A Poisson null has no room for overdispersion, so the extra
+  variance read as interaction. A cell total of variance `phi x mean`
+  behaves like a Poisson count after dividing by `phi`, and the deviance is
+  homogeneous of degree one, so `D / phi` against a null on `E / phi` is
+  the same test on rescaled counts. The `phi` is the mean-weighted
+  Pearson, not the row-level one: a total adds rows by their mean, and
+  under a gamma frailty the rows with a larger mean carry more of the extra
+  variance.
+- **Where.** `R/interactions.R`, `detect_interactions()`.
+- **Evidence.** Before: ten books with a dispersion of 1.9 and no
+  interaction, 33 of 60 pairs at `P < 0.05`. With the row-level Pearson
+  (1.72 against 1.91 for the cell totals of random partitions of the same
+  rows) still 8 of 60. With the cell-total dispersion, 100 books per case:
+  10 of 300 pairs (3.3%) at a dispersion of 1.94, 20 of 300 (6.7%) on pure
+  Poisson; an interaction of 0.15 on the log scale found in 83% of the
+  books on pure Poisson and 48% at a dispersion of 2.0.
+- **Limitation.** One dispersion for the whole book. Under a gamma frailty
+  the cells with larger expected counts carry more overdispersion than the
+  average, so the test is slightly liberal there and slightly conservative
+  elsewhere.
+- **Pinned by.** `test-review-findings.R`: "the interaction scan is not
+  fooled by overdispersion".
+
 ### PDP: partial dependence
 
 #### PDP-01 An arithmetic mean on the response scale
 
 - **Decision.** For each grid value, the whole training data is set to it,
-  predicted on the response scale with the offset removed, and averaged
-  with weights.
+  predicted on the response scale with the exposure offset removed
+  (PDP-05), and averaged with weights.
 - **Why.** `exp(mean(link))` is a geometric mean and biased low.
 - **Where.** `R/pdp.R`, `make_pdp()`.
 - **Pinned by.** `test-pdp.R`: "make_pdp computes the exposure-weighted
@@ -946,6 +1286,26 @@ dashes. Each register entry here is written so it can be read on its own.
   grid of the rating table.
 - **Where.** `R/pdp.R`. See section 4.
 
+#### PDP-05 The PDP keeps every offset except the exposure
+
+- **Decision.** `keep_offsets = TRUE` (default): only the offset
+  expressions on `exposure_col` are subtracted, as in OFF-05, and any other
+  offset stays in at each policy's own value. The variables of the
+  subtracted offsets are pinned to 1 for the collapse to profiles; the kept
+  ones become part of the profile. `FALSE` subtracts everything. The
+  default y-axis title names the offsets kept.
+- **Why.** The observed line is at each policy's own BM. A PDP at BM = 1
+  against it showed a gap on a model that was exactly right.
+- **Where.** `R/pdp.R`, `make_pdp()`.
+- **Evidence.** The review's book with an average BM of 0.74: the PDP ran
+  1.347 to 1.359 times the observed line at every level before; on the
+  regression test it now sits within 5% of it.
+- **Pinned by.** `test-review-findings.R`: "the PDP sits on the observed
+  line with a bonus-malus offset"; `test-offset-link.R`: "a second offset
+  does not end up on the exposure axis".
+- **History.** Until the review fixes of October 2026 the PDP removed the
+  whole offset (OFF-06).
+
 ### DIAG: diagnostics, Q-Q and influence
 
 #### DIAG-01 Dispersion
@@ -970,8 +1330,9 @@ dashes. Each register entry here is written so it can be read on its own.
 #### DIAG-03 Binned residuals
 
 - **Decision.** Mean residual per quantile bin of the fitted value or a
-  predictor, with a band of `2 sqrt(phi / n)` from the Pearson dispersion;
-  points, never a line.
+  predictor, with a band of `2 sqrt(sum of the row variances) / n`, which
+  is `2 sqrt(phi / n)` for Pearson residuals; deviance residuals are
+  centred first (DIAG-06). Points, never a line.
 - **Why.** Bin means are independent draws; a line invites a trend.
 - **Where.** `R/diagnostics.R`, `plot_glm_residuals()`.
 - **Pinned by.** `test-agg-plots.R`: "binned residuals are drawn as points,
@@ -1009,6 +1370,61 @@ dashes. Each register entry here is written so it can be read on its own.
   invisible to Cook's distance", "an extreme predictor value tops the
   ranking, and masks itself", "plot_glm_influence caps the row count with
   a message".
+
+#### DIAG-06 Deviance residuals are centred on their expectation
+
+- **Decision.** With `residual_type = "deviance"`, each row's residual is
+  shown minus its expectation under the fitted model, and the band per bin
+  uses the rows' own variances (`.dev_resid_moments()`). The moments are
+  exact sums over the response distribution, computed on a grid of the one
+  parameter they depend on and interpolated: Poisson and quasipoisson on
+  the mean count, negative binomial with unit weights, binomial for up to
+  20 distinct trial counts, Gamma per prior weight (closed-form second
+  moment, integrated first), Gaussian. Count families scale the variance
+  by the Pearson dispersion. Other families are shown uncentred with a
+  warning. The axis title says "centred".
+- **Why.** A deviance residual is not centred: a claim-free row has
+  `-sqrt(2 mu)`, so for small means the residuals are negative on average
+  and a correct model sat below the band in every bin.
+- **Where.** `R/utils-internal.R`, `.dev_resid_moments()`;
+  `R/diagnostics.R`, `plot_glm_residuals()`.
+- **Evidence.** A correct Poisson book of 60,000 rows: mean binned deviance
+  residual -0.220 against a band of 0.058, 50 of 50 bins outside it.
+- **Pinned by.** `test-review-findings.R`: "binned deviance residuals of a
+  correct Poisson model stay in the band".
+
+#### DIAG-07 A term in an interaction is reported, not flagged
+
+- **Decision.** `glm_collinearity()` marks every interaction term and every
+  term whose variables appear in one (`InInteraction`), reports their GVIF
+  and leaves `Flag` at `NA` for them, with a warning naming them.
+- **Why.** Their GVIF depends on how the variables are coded rather than on
+  the data. Centring the numeric side of an interaction moves the
+  coefficients of the other variable's main effect to another reference
+  point, and with it their correlation with the interaction's. A term
+  outside the interaction is unaffected, because its GVIF is invariant to
+  any reparametrisation of the remaining terms.
+- **Where.** `R/diagnostics.R`, `glm_collinearity()`.
+- **Evidence.** The review: with `pmin(LEEFTIJD, 30):STEDELIJKHEID`,
+  writing the age part as `pmin(LEEFTIJD, 30) - 30` moved the scaled GVIF
+  of `STEDELIJKHEID` from 14.12 to 1.11, with the fitted values equal to
+  2e-14.
+- **Pinned by.** `test-collinearity-spotlight.R`: "a GVIF that depends on
+  the coding is not flagged", "splines and rank deficiency do not empty the
+  table".
+
+#### DIAG-08 Negative binomial models
+
+- **Decision.** A negative binomial fit, from `MASS::glm.nb()` or a `glm()`
+  with `MASS::negative.binomial(theta)`, gets randomised quantile residuals
+  from `pnbinom()` and centred deviance residuals, when its prior weights
+  are 1. Theta is read from `model$theta` or the family's environment.
+- **Why.** Its family name carries theta, "Negative Binomial(1.4)", so it
+  fell through to the deviance fallback, which is not normal for counts.
+- **Where.** `R/utils-internal.R`, `.nb_theta()`;
+  `R/qq-influence.R`, `.quantile_residuals()`.
+- **Pinned by.** `test-review-findings.R`: "a glm.nb model works in
+  make_pdp and the A/E plot".
 
 ### SCR: feature screening
 
@@ -1082,13 +1498,32 @@ dashes. Each register entry here is written so it can be read on its own.
   "near-duplicate candidates are reported", "an uncorrelatable pair does
   not corrupt the near-duplicate table".
 
+#### SCR-08 Outcome columns are not candidates
+
+- **Decision.** With `features = NULL`, the candidates exclude the
+  response, the offset variables, the prior-weight variables and
+  `claims_col`, `loss_col` and `exposure_col`, with a message naming the
+  columns left out. Named explicitly in `features`, such a column stays,
+  with a warning.
+- **Why.** The booster takes whatever predicts the response, and the loss
+  amount predicts the claim count perfectly: the ranking and the verdict
+  were then about leakage, not risk.
+- **Where.** `R/screen.R`, `screen_features()`.
+- **Evidence.** The review's WA book: `SCHADELAST` ranked first with a
+  `PermDeviance` of 7,188 and 97% of the gain, and the verdict said the
+  baseline missed main effects worth 95.9% of its deviance. On a severity
+  model the claim count, its weight, ranked second.
+- **Pinned by.** `test-review-findings.R`: "screen_features does not take
+  the loss amount as a candidate".
+
 ### EXP: Excel export
 
 #### EXP-01 Workbook layout
 
 - **Decision.** An Overview sheet (timestamp, the three intercepts, the
   base value per variable), a Tariff sheet with every factor under a lookup
-  key `Variable|Level` or `Variable|Level|Group`, one sheet per main effect
+  key `Variable|Level` or `Variable|Level|Group` (an interaction key holds
+  the uplift, EXP-04), one sheet per main effect
   (base row highlighted, thin rows greyed), and one per interaction with a
   Level x Group matrix of `Factor_Premium` (falling back to frequency or
   severity when that is empty).
@@ -1114,16 +1549,49 @@ dashes. Each register entry here is written so it can be read on its own.
 - **Consequence.** A premium from the workbook is
   `Intercept premium x VLOOKUP factors x BM_KORTING`.
 
+#### EXP-04 An interaction key on the Tariff sheet holds the uplift
+
+- **Decision.** The factor columns of an interaction row on the Tariff
+  sheet hold `Uplift_*`, the joint factor over the two main factors, and
+  the instruction on the sheet says so. The interaction sheets keep the
+  joint factor.
+- **Why.** The instruction is "every variable's factor, times each
+  interaction key". With the joint factor under the key, the two main
+  effects were counted twice. With the uplift, main x main x uplift is the
+  joint factor and the instruction holds literally.
+- **Where.** `R/export.R`, the Tariff block.
+- **Evidence.** The review rebuilt premiums by the instruction on a sample
+  of policies: 16% too high on average, 5th to 95th percentile -21% to
+  +79%, at most 3.4 times.
+- **Pinned by.** `test-review-findings.R`: "the Tariff sheet instruction
+  rebuilds the premium with an interaction".
+
+#### EXP-05 The intercepts on the Overview sheet are numbers
+
+- **Decision.** The Overview's value column is written as text and the
+  intercepts and numeric base values are then written over it as numbers.
+- **Why.** The column mixes a timestamp, levels and numbers. A number
+  stored as text is what a formula referring to the intercept picks up, and
+  in a locale with a decimal comma "0.110053" is not a number at all.
+- **Where.** `R/export.R`, the Overview block.
+- **Pinned by.** `test-review-findings.R`: "the intercepts on the Overview
+  sheet are numbers, not text".
+
 ### REP: HTML report
 
-#### REP-01 One rating table, default arguments
+#### REP-01 One rating table, with the table's own arguments
 
-- **Decision.** The report builds one rating table with `grid_res`,
-  `base_level` and `trim`, and passes no `merge_vars`, `base` or
-  `grid_step`.
-- **Consequence.** A tariff with merged columns shows two blocks in the
-  report. See section 4.
+- **Decision.** The report builds one rating table and passes `grid_res`,
+  `base_level`, `trim`, `merge_vars`, `base`, `grid_step`, `year_col`,
+  `loss_col`, `exposure_col` and `claims_col` on to it.
+- **Why.** The report should show the tariff a table built with the same
+  arguments shows.
 - **Where.** `R/report.R`, `pricing_report()`.
+- **Pinned by.** `test-review-findings.R`: "the report passes merge_vars
+  and base to its rating table".
+- **History.** Until the review fixes of October 2026 the report passed no
+  `merge_vars`, `base` or `grid_step`, so a merged field showed as two
+  blocks.
 
 #### REP-02 What the report contains and how it fails
 
@@ -1131,17 +1599,33 @@ dashes. Each register entry here is written so it can be read on its own.
   per variable the one-way (severity only alongside a severity model), A/E,
   PDP and rating plot; the rating table's interaction plots and an
   interaction scan on the frequency model (`n_bins = 10`, `n_sim = 100`,
-  top 3 heatmaps). A failing plot is replaced by a note.
+  top 3 heatmaps). A failing plot is replaced by a note (REP-03).
 - **Where.** `R/report.R`.
 - **Pinned by.** `test-export-report.R`: "pricing_report writes a complete
   HTML report", "the one-way block covers severity, not just frequency".
+
+#### REP-03 Every plot is built inside the guard
+
+- **Decision.** Each plot is passed through `plotly::plotly_build()`
+  inside the error guard, so a plot that cannot be built becomes a note. A
+  number of 1e9 or more in a table is printed in scientific notation, and
+  `NA` in a table cell prints as empty.
+- **Why.** plotly builds a widget only when the page is written, so an
+  error in one plot escaped the guard and took the whole report down at
+  `save_html()`. `formatC(format = "d")` goes through an integer, so a
+  large GVIF printed as "NA".
+- **Where.** `R/report.R`, `safe()`, `fmt_num()`, `html_table()`.
+- **Evidence.** The review: "Wasn't able to determine range of domain" on a
+  400-policy book.
+- **Pinned by.** `test-review-findings.R`: "pricing_report writes a report
+  for a small book too".
 
 ### DATA: data handling and one-way aggregation
 
 #### DATA-01 Training data is aligned by row name
 
-- **Decision.** `model$data` is matched to the model frame by row name,
-  not by position.
+- **Decision.** The training data (`.model_data()`, DATA-05) is matched to
+  the model frame by row name, not by position.
 - **Why.** Rows dropped by `na.action` and non-numeric row names would
   otherwise misalign values and fitted values.
 - **Where.** `R/utils-internal.R`, `.glm_training_data()`.
@@ -1180,6 +1664,38 @@ dashes. Each register entry here is written so it can be read on its own.
   `discrete_cutoff` (25) values, is drawn with markers only.
 - **Where.** `R/plot-oneway.R`, `R/pdp.R`.
 
+#### DATA-05 The training data of a model without model$data
+
+- **Decision.** `.model_data()` returns `model$data` when that is a data
+  frame, and otherwise evaluates the data the call names in the
+  environment where the formula was written. Data found that way is
+  checked against the model frame: if a plain column no longer matches,
+  the data has changed since the fit and the function stops.
+- **Why.** `MASS::glm.nb()` keeps no `model$data`, and a `glm()` fitted
+  without `data =` keeps an environment there. The call still names the
+  data, so PDP, A/E and grouped columns can be read. A name that has been
+  reassigned since would silently pair other rows with the fit.
+- **Where.** `R/utils-internal.R`, `.model_data()`, `.glm_training_data()`.
+- **Pinned by.** `test-review-findings.R`: "a glm.nb model works in
+  make_pdp and the A/E plot"; `test-rating-table.R`: "a regrouped column
+  missing from 'data' is taken from the model".
+
+#### DATA-06 A model fitted with na.exclude is read as na.omit
+
+- **Decision.** Every function that mixes residuals, fitted values or
+  influence measures with the model frame reads the model through
+  `.as_na_omit()`, which sets the class of its `na.action` to `"omit"` on
+  the local copy.
+- **Why.** `na.exclude` pads `residuals()`, `fitted()` and `predict()`
+  back to the full data with `NA`, while the model frame holds only the
+  rows the fit used. Five functions failed on that, and the heatmap and
+  the Q-Q plot were silently wrong because the vectors were recycled
+  against each other. The fit itself is identical to `na.omit`.
+- **Where.** `R/utils-internal.R`, `.as_na_omit()`; `R/ae.R`,
+  `R/diagnostics.R`, `R/interactions.R`, `R/qq-influence.R`, `R/pdp.R`.
+- **Pinned by.** `test-review-findings.R`: "na.exclude gives the same
+  result as na.omit".
+
 ---
 
 ## 4. Known limitations and open points
@@ -1187,9 +1703,10 @@ dashes. Each register entry here is written so it can be read on its own.
 These are known, deliberate or not yet addressed. Each says what to do
 about it today.
 
-1. **The report does not pass `merge_vars`, `base` or `grid_step`**
-   (REP-01). Build the rating table yourself for those; the report's own
-   table shows two blocks for a merged field and the regrouping warning.
+1. **The bootstrap intervals hold the models fixed** (RATE-11). They
+   resample policies, not the fit, so an in-sample interval is narrower
+   than an honest one. Use a holdout for a Gini or a double lift you want
+   to act on.
 2. **Heatmap and interaction scan take `exp(offset)` as the volume**
    (OFF-08). With a BM offset, the exposure in the tooltip and
    `MaxAE_ExposureShare` are BM-weighted. The A/E is unaffected.
@@ -1213,9 +1730,22 @@ about it today.
 9. **`seed` changes the global random state** (CONV-08).
 10. **Only `glm` objects are supported.** GAMs, GBMs and mixed models are
     not read.
-11. **A model fitted without `data =`** cannot be used where the training
-    data or a grouping has to be recovered (PDP, lift in-sample, screening,
-    influence on a sample, deriving grouped columns); each says so.
+11. **A model fitted without `data =`** is read through the data its call
+    names (DATA-05). When that name no longer exists, or holds other data,
+    it cannot be used where the training data or a grouping has to be
+    recovered (PDP, lift in-sample, screening, influence on a sample,
+    deriving grouped columns); each says so.
+12. **The standard errors in the rating table assume the model's
+    dispersion** (RT-12). For a Poisson that is 1, so on overdispersed
+    claim counts they are too small; fit a quasipoisson for honest ones.
+13. **The interaction scan uses one dispersion for the whole book**
+    (INT-05). Under a gamma frailty, cells with a large expected count
+    carry more overdispersion than the average.
+14. **Deviance residuals are centred for the common families only**
+    (DIAG-06): Poisson, quasipoisson, negative binomial with unit weights,
+    binomial with at most 20 distinct trial counts, Gamma, Gaussian. Other
+    families are shown uncentred with a warning; use Pearson residuals
+    there.
 
 ---
 
@@ -1236,6 +1766,7 @@ about it today.
 | screening | `test-screen.R` |
 | export and report | `test-export-report.R` |
 | awkward names, trimming, sheet names | `test-awkward-names.R` |
+| the external review of October 2026: NA cells, `cut()`, logical predictors, `na.exclude`, the Tariff uplift, contribution, PDP with BM, overdispersion in the scan, deviance residuals, screening leakage, scoring messages, `at`, intervals, standard errors | `test-review-findings.R` |
 | data.table and tibble input | `test-data-table-input.R` |
 | axis ranges | `test-y-range.R` |
 
@@ -1265,6 +1796,9 @@ every push to `main` (`.github/workflows/R-CMD-check.yaml`).
 | factor | a prediction relative to the base, everything else at base (RT-01) |
 | uplift | an interaction's joint factor over the product of its two main factors |
 | thin cell | a level or cell with fewer than `min_claims` claims (RT-07) |
+| `SE_Frequency`, `SE_Severity` | standard error of the logarithm of a factor (RT-12) |
+| inconclusive | a double-lift verdict whose interval includes 0 (RATE-09) |
+| cell-total dispersion | `sum((y - mu)^2) / sum(mu)`, the overdispersion of a sum of rows (INT-05) |
 | A/E | actual over expected; for counts `sum(y) / sum(mu)` |
 | source / grouped column | a column and a regrouping of it, such as `Stedelijkheid` and `Stedelijkheid_groep` (MV) |
 | kept offset | an offset that stays in a comparison rate, such as the BM (OFF-05) |

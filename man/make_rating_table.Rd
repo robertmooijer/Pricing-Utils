@@ -16,7 +16,9 @@ make_rating_table(
   min_claims = 30,
   grid_step = NULL,
   base = NULL,
-  merge_vars = NULL
+  merge_vars = NULL,
+  year_col = "BOEKJAAR",
+  loss_col = "SCHADELAST"
 )
 }
 \arguments{
@@ -45,7 +47,7 @@ fewer claims get \code{IsThin = TRUE} (default 30). A GLM applies no
 shrinkage to a categorical level, so such a factor comes essentially
 from those few claims; it is dimmed by \code{\link[=make_rating_plot]{make_rating_plot()}} and
 greyed out by \code{\link[=export_rating_table]{export_rating_table()}}. Thin categorical levels also
-raise a warning.}
+raise a warning, which names the levels without any claim as well.}
 
 \item{grid_step}{Step size for continuous grids. \code{NULL} (default)
 picks a readable step per variable: roughly \code{grid_res} points across
@@ -122,12 +124,26 @@ variable it is merged into. When the relation is there but not
 declared, and each column is used by one of the two models, this is
 pointed out in a warning rather than left to be discovered in a
 spreadsheet.}
+
+\item{year_col}{Accounting year column (default \code{"BOEKJAAR"}), or
+\code{NULL}. When a model uses it as a rating factor, its default base is
+the latest year rather than the first level, so the intercept is the
+current price level instead of the oldest one; the other factors do
+not change. \code{base} still overrides it, e.g. \code{list(BOEKJAAR = 2023)}.}
+
+\item{loss_col}{Loss amount column (default \code{"SCHADELAST"}), read only
+to warn when claims without payment would make frequency x severity
+overstate the risk premium.}
 }
 \value{
 A data.frame with one row per level/grid point per variable
 (columns \code{Variable}, \code{Type}, \code{Level}, \code{LevelNum}, \code{Group}, \code{IsBase},
-\code{Exposure}, \code{ClaimCount}, \verb{Factor_*}, \verb{Uplift_*}, \code{IsThin}, \code{XVar},
-\code{GroupVar}). The three \verb{Uplift_*} columns are present \strong{only when the
+\code{Exposure}, \code{ClaimCount}, \verb{Factor_*}, \verb{Uplift_*}, \code{SE_Frequency},
+\code{SE_Severity}, \code{IsThin}, \code{XVar}, \code{GroupVar}). \verb{SE_*} is the standard
+error of the logarithm of the factor in that row: 0 at the base and
+for a variable the model does not use, \code{NA} where there is no factor.
+On an interaction row it belongs to the joint relativity against the
+base cell. The three \verb{Uplift_*} columns are present \strong{only when the
 model contains at least one interaction term}; without one they would
 be \code{NA} in every row, so they are dropped. \code{Group} and \code{GroupVar} are
 always there, because \code{is.na(Group)} is how a main-effect row is told
@@ -143,12 +159,17 @@ severity model (both log link), including two-way interactions.
 \details{
 Base convention: the base level is the reference level for categorical
 variables (first xlevel, or the level with the largest exposure when
-\code{base_level = "exposure"}), the median for continuous variables (added
-as an explicit grid point, \code{IsBase = TRUE}), and 1 for the exposure
-column. As a result, for log-link models without interactions the
-identity holds exactly: intercept x product(factors) = model prediction
-per exposure unit. A variable that is absent from one of the two models
-gets the neutral factor 1 there (so \code{Factor_Premium} remains correct).
+\code{base_level = "exposure"}), the latest year for the accounting year
+(\code{year_col}), the median for continuous variables (added as an explicit
+grid point, \code{IsBase = TRUE}), and 1 for the exposure column. As a
+result, for log-link models without interactions the identity holds
+exactly: intercept x product(factors) = model prediction per exposure
+unit. A variable that is absent from one of the two models gets the
+neutral factor 1 there (so \code{Factor_Premium} remains correct).
+
+A term that turns a column into a factor inside the formula, such as
+\code{cut(LEEFTIJD, c(17, 24, 40, 65, 99))}, is reported on its bands; a
+logical column (\code{GARAGE = TRUE}) on \code{TRUE} and \code{FALSE}.
 
 Interaction rows contain the joint relativity relative to the base cell
 and the pure uplift: joint / (main_factor_x * main_factor_group). They
@@ -159,5 +180,15 @@ where a portfolio runs out of data, so \code{IsThin} matters most there.
 
 Levels backed by fewer than \code{min_claims} claims get \code{IsThin = TRUE}
 (thin categorical levels also raise a warning) and are dimmed in
-\code{\link[=make_rating_plot]{make_rating_plot()}}.
+\code{\link[=make_rating_plot]{make_rating_plot()}}. That flag counts claims; the precision of a factor
+is in \code{SE_Frequency} and \code{SE_Severity}, the standard error of its
+logarithm from the model's covariance matrix. A level with 31 claims
+passes the flag with a standard error of 0.18, which is a 95\% interval
+of x0.70 to x1.42 around its factor.
+
+A level that is in \code{data} but not in the data a model was fitted on,
+typically a level without claims that the severity model never saw,
+keeps its row: the factor of that model is \code{NA} there, and so is the
+premium factor, with a warning. Only a base row the model does not know
+is an error, since every factor is a ratio against it.
 }

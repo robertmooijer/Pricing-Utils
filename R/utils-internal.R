@@ -21,13 +21,45 @@
   if (!identical(class(x), "data.frame")) as.data.frame(x) else x
 }
 
+# [DATA-05]
+# The data a model was fitted on. glm() keeps it as model$data. MASS::glm.nb()
+# does not, and a model fitted without data = keeps its environment there,
+# but the call still names the data, so it is evaluated where the formula
+# was written. Returns NULL when there is nothing to find. Rows are matched
+# by name afterwards in .glm_training_data(), which also checks that the
+# data has not changed since the fit.
+.model_data <- function(model) {
+  if (is.null(model)) return(NULL)
+  if (is.data.frame(model$data)) return(model$data)
+  cd <- if (!is.null(model$call)) model$call$data else NULL
+  if (is.null(cd)) return(NULL)
+  env <- tryCatch(environment(formula(model)), error = function(e) NULL)
+  if (is.null(env)) return(NULL)
+  d <- tryCatch(eval(cd, env), error = function(e) NULL)
+  if (is.data.frame(d)) d else NULL
+}
+
+# [DATA-06]
+# na.exclude pads residuals(), fitted(), predict() and the influence measures
+# back to the full data with NA, while model.frame() holds only the rows the
+# fit used. Every function that mixes the two misaligned: five of them
+# failed and two (the heatmap, the Q-Q plot) went silently wrong. The fit
+# itself is identical to na.omit, so the model is read as if fitted with
+# na.omit. Only this local copy changes; the caller's object does not.
+.as_na_omit <- function(model) {
+  if (!is.null(model) && inherits(model$na.action, "exclude"))
+    class(model$na.action) <- "omit"
+  model
+}
+
 # [DATA-01]
 # Training data (original columns) aligned with the fitted rows of a glm.
 # Uses rownames matching instead of as.integer(rownames), so it also works
 # with non-numeric rownames and rows dropped by na.action.
 .glm_training_data <- function(model, fn = "pricingtoolsRmO") {
   mf <- .as_df(stats::model.frame(model))
-  d  <- .as_df(model$data)
+  from_call <- !is.data.frame(model$data)
+  d  <- .as_df(.model_data(model))
   if (!is.null(d) && is.data.frame(d)) {
     idx <- match(rownames(mf), rownames(d))
     if (anyNA(idx))
@@ -35,6 +67,21 @@
            "model$data; fit the model with a 'data =' argument.",
            call. = FALSE)
     d <- d[idx, , drop = FALSE]
+    # Data found through the call is whatever that name holds now. If it
+    # was changed after the fit, the plain columns of the model frame no
+    # longer match it, and that is said rather than read past.
+    if (from_call) {
+      shared <- intersect(names(mf)[vapply(mf, function(x) is.null(dim(x)),
+                                           logical(1))], names(d))
+      changed <- shared[!vapply(shared, function(v)
+        isTRUE(all.equal(as.character(mf[[v]]), as.character(d[[v]]))),
+        logical(1))]
+      if (length(changed))
+        stop(fn, ": the data the model's call names has changed since the ",
+             "fit (column ", paste(utils::head(changed, 3), collapse = ", "),
+             " differs); refit the model, or fit it with data = so the data ",
+             "is kept with it.", call. = FALSE)
+    }
   } else {
     d <- NULL
   }
@@ -65,8 +112,12 @@
          "column are needed as well, because the point of the plot is to ",
          "hold the realised figure against the prediction.", call. = FALSE)
 
-  # xlev makes a level the model never saw an error here, with the name of
-  # the variable in it, rather than a bare predict() failure further down.
+  # [SCORE-01] A level the model never saw is named with its column and
+  # rows; xlev below is the backstop for anything this check cannot
+  # evaluate, rather than a bare predict() failure further down.
+  un <- .unseen_levels(model, newdata)
+  if (length(un)) stop(.unseen_message(un, "", fn, at_hint = FALSE),
+                       call. = FALSE)
   mf <- tryCatch(
     .as_df(stats::model.frame(tt, data = newdata,
                               na.action = stats::na.omit,
@@ -103,17 +154,132 @@
   as.numeric(rng)
 }
 
+# [RT-14]
 # Coerce values to the type of an existing column, so that inline
 # transformations in the formula (e.g. factor(YEAR) on a numeric column)
-# can be predicted correctly.
+# can be predicted correctly. A logical column stays logical: predict()
+# refuses a character where the model was fitted on TRUE/FALSE.
 .coerce_like <- function(vals, template) {
   if (is.factor(template)) {
     factor(as.character(vals), levels = levels(template))
+  } else if (is.logical(template)) {
+    as.logical(as.character(vals))
   } else if (is.numeric(template)) {
     suppressWarnings(as.numeric(as.character(vals)))
   } else {
     as.character(vals)
   }
+}
+
+# [SCORE-01]
+# Values of a factor term that a model was not fitted on, per data column.
+# Checked before predict(), so the message names the column and the values,
+# instead of predict()'s "factor has new levels" surfacing from inside an
+# offset evaluation or a model.frame() call, where it reads as something
+# else. The term is evaluated on the data, so factor(BOEKJAAR) and a cut()
+# banding are compared on the levels the model actually has. Returns a list
+# per column with the unseen values, their row count and a logical row mask.
+.unseen_levels <- function(model, data) {
+  xl  <- model$xlevels
+  out <- list()
+  if (is.null(xl) || !length(xl)) return(out)
+  env <- tryCatch(environment(formula(model)), error = function(e) NULL)
+  for (nm in names(xl)) {
+    col <- .term_base_var(nm, data)
+    if (!col %in% names(data)) next
+    v <- tryCatch(as.character(eval(str2lang(nm), data, env)),
+                  error = function(e) NULL)
+    if (is.null(v) || length(v) != nrow(data)) next
+    bad <- !is.na(v) & !v %in% xl[[nm]]
+    if (any(bad))
+      out[[col]] <- list(values = unique(v[bad]), n = sum(bad), rows = bad)
+  }
+  out
+}
+
+# The message for those values, shared by every function that scores data.
+# `label` names the model ("new frequency") or is "" for a lone model;
+# `at_hint` points at the 'at' argument where the function has one.
+.unseen_message <- function(un, label, fn, at_hint = TRUE) {
+  parts <- vapply(names(un), function(cl)
+    sprintf("'%s' = %s (%d row%s)", cl,
+            paste(utils::head(un[[cl]]$values, 5), collapse = ", "),
+            un[[cl]]$n, if (un[[cl]]$n == 1) "" else "s"), character(1))
+  paste0(fn, ": the data holds value(s) the ", .model_label(label),
+         "was not fitted on: ", paste(parts, collapse = "; "), ". A model ",
+         "has no factor for a level it never saw. Map those values to a ",
+         "level it knows or leave the rows out",
+         if (at_hint) paste0("; for an accounting year beyond the data, ",
+                             "price at the latest known year with 'at' and ",
+                             "index the result yourself") else "",
+         ".")
+}
+
+# "model " or "frequency model ", for the messages above and below.
+.model_label <- function(label) {
+  if (is.null(label) || !nzchar(label) || identical(label, "the"))
+    "model " else paste0(label, " model ")
+}
+
+# [SCORE-02]
+# Numeric predictors outside the range the model was fitted on. predict()
+# extrapolates there without a word - linearly on the link scale beyond the
+# last knot of a spline, without limit for a log term - so it is said once
+# per call. A column the model turns into a factor (factor(BOEKJAAR)) is a
+# level question, not a range one, and is left to .unseen_levels().
+.range_warning <- function(model, data, label, fn) {
+  tr <- tryCatch(.glm_training_data(model, fn)$data, error = function(e) NULL)
+  if (is.null(tr)) return(invisible(NULL))
+  vars <- setdiff(.rhs_vars(model), .offset_vars(model))
+  fac  <- if (length(model$xlevels))
+    vapply(names(model$xlevels), .term_base_var, character(1), data = tr)
+    else character(0)
+  vars <- vars[vars %in% names(tr) & vars %in% names(data) & !vars %in% fac]
+  msgs <- character(0)
+  for (v in vars) {
+    if (!is.numeric(tr[[v]]) || !is.numeric(data[[v]])) next
+    r   <- range(tr[[v]], na.rm = TRUE)
+    out <- sum(data[[v]] < r[1] | data[[v]] > r[2], na.rm = TRUE)
+    if (out)
+      msgs <- c(msgs, sprintf("'%s' (%d row%s outside %s to %s)", v, out,
+                              if (out == 1) "" else "s", format(r[1]),
+                              format(r[2])))
+  }
+  if (length(msgs))
+    warning(fn, ": the data goes beyond the range the ", .model_label(label),
+            "was fitted on for ", paste(msgs, collapse = ", "), "; the model ",
+            "extrapolates there (a spline linearly on the log scale, a log ",
+            "term without limit). Cap the values to the fitted range if that ",
+            "is not intended.", call. = FALSE)
+  invisible(NULL)
+}
+
+# [RATE-10]
+# Price every row at one value of some columns, e.g. at = list(BOEKJAAR =
+# 2024): with the accounting year as a rating factor each policy is
+# otherwise priced at the level of its own historic year. Validated like
+# every other column argument; a value must be valid for the column.
+.apply_at <- function(data, at, fn) {
+  if (is.null(at)) return(data)
+  at <- as.list(at)
+  if (is.null(names(at)) || any(!nzchar(names(at))))
+    stop(fn, ": 'at' must be named, e.g. list(BOEKJAAR = 2024).",
+         call. = FALSE)
+  .check_cols(data, names(at), fn)
+  for (v in names(at)) {
+    val <- at[[v]]
+    if (length(val) != 1)
+      stop(fn, ": 'at' for '", v, "' must be one value.", call. = FALSE)
+    new <- .coerce_like(rep(val, nrow(data)), data[[v]])
+    if (anyNA(new))
+      stop(fn, ": '", val, "' is not a valid value for '", v, "'",
+           if (is.factor(data[[v]]))
+             paste0("; its levels are ", paste(levels(data[[v]]),
+                                                collapse = ", ")) else "",
+           ".", call. = FALSE)
+    data[[v]] <- new
+  }
+  data
 }
 
 # Predictor variables (RHS) of a model; robust for composite responses
@@ -352,8 +518,13 @@
 # the one in the linear predictor. Following the model's own offset
 # expressions avoids that, and the warning below says the rate is then per
 # unit of that other variable.
-.model_rate <- function(model, data, exposure_col, fn, keep_offsets = TRUE) {
+.model_rate <- function(model, data, exposure_col, fn, keep_offsets = TRUE,
+                        label = "") {
   if (is.null(model)) return(rep(1, nrow(data)))
+  # [SCORE-01] [SCORE-02] what the model cannot price, named before predict()
+  un <- .unseen_levels(model, data)
+  if (length(un)) stop(.unseen_message(un, label, fn), call. = FALSE)
+  .range_warning(model, data, label, fn)
   if (is.null(model$offset))
     return(as.numeric(predict(model, newdata = data, type = "response")))
   sp <- .offset_split(model, exposure_col, keep_offsets)
@@ -404,7 +575,8 @@
 .old_new_rates <- function(data, model_freq_new, model_sev_new,
                            model_freq_old, model_sev_old,
                            old_premium_col, old_premium_basis,
-                           exposure_col, fn, keep_offsets = TRUE) {
+                           exposure_col, fn, keep_offsets = TRUE,
+                           at = NULL, divisor_col = exposure_col) {
   if (is.null(model_freq_new) && is.null(model_sev_new))
     stop(fn, ": provide at least one NEW model.", call. = FALSE)
   has_old <- !is.null(model_freq_old) || !is.null(model_sev_old)
@@ -414,15 +586,23 @@
     stop(fn, ": provide either old models or 'old_premium_col', not both.",
          call. = FALSE)
 
+  # The models price the data with `at` applied; an old premium column is
+  # what was charged and is read as it is
+  pd <- .apply_at(data, at, fn)
+
   # Both sides get the same treatment of their offsets, so a bonus-malus
   # scale either stays in on both or comes out on both
-  new_rate <- .model_rate(model_freq_new, data, exposure_col, fn, keep_offsets) *
-              .model_rate(model_sev_new,  data, exposure_col, fn, keep_offsets)
+  new_rate <- .model_rate(model_freq_new, pd, exposure_col, fn, keep_offsets,
+                          "new frequency") *
+              .model_rate(model_sev_new,  pd, exposure_col, fn, keep_offsets,
+                          "new severity")
   old_rate <- if (has_old) {
-    .model_rate(model_freq_old, data, exposure_col, fn, keep_offsets) *
-      .model_rate(model_sev_old, data, exposure_col, fn, keep_offsets)
+    .model_rate(model_freq_old, pd, exposure_col, fn, keep_offsets,
+                "old frequency") *
+      .model_rate(model_sev_old, pd, exposure_col, fn, keep_offsets,
+                  "old severity")
   } else if (old_premium_basis == "amount") {
-    data[[old_premium_col]] / data[[exposure_col]]
+    data[[old_premium_col]] / data[[divisor_col]]
   } else {
     data[[old_premium_col]]
   }
@@ -488,15 +668,82 @@
 # 0 means no discrimination, higher means the model separates risk better.
 # Not the classical income Gini, which orders by the variable itself.
 .gini_exposure <- function(score, actual, weight) {
-  # Without losses the Lorenz curve has no vertical scale, and the naive
-  # formula returns NaN, which then prints as "NaN" in a chart title
-  if (!isTRUE(sum(actual) > 0)) return(NA_real_)
   o <- order(score)
-  x <- cumsum(weight[o]) / sum(weight)
-  y <- cumsum(actual[o]) / sum(actual)
-  x <- c(0, x); y <- c(0, y)
-  auc <- sum(diff(x) * (utils::head(y, -1) + utils::tail(y, -1)) / 2)
-  1 - 2 * auc
+  .gini_ordered(weight[o], actual[o])
+}
+
+# The same on vectors already in score order, so a bootstrap can reuse one
+# sort. Without losses the Lorenz curve has no vertical scale, and the naive
+# formula returns NaN, which then prints as "NaN" in a chart title.
+.gini_ordered <- function(w, a) {
+  if (!isTRUE(sum(a) > 0) || !isTRUE(sum(w) > 0)) return(NA_real_)
+  x <- c(0, cumsum(w) / sum(w))
+  y <- c(0, cumsum(a) / sum(a))
+  1 - 2 * sum(diff(x) * (utils::head(y, -1) + utils::tail(y, -1)) / 2)
+}
+
+# [RATE-11]
+# Bootstrap interval for the Gini. A Gini on raw losses is dominated by a
+# few large claims: on a 16,000-policy holdout the 90% interval ran from
+# 0.14 to 0.33 around a point value of 0.23, wider than the gap between two
+# competing models. Policies are resampled with Poisson(1) counts, the usual
+# large-sample stand-in for resampling with replacement, so the book is
+# sorted once and every replicate is one weighted pass over it.
+.gini_boot <- function(score, actual, weight, n_boot, conf) {
+  if (n_boot < 1) return(c(NA_real_, NA_real_))
+  o <- order(score); a <- actual[o]; w <- weight[o]
+  sims <- vapply(seq_len(n_boot), function(b) {
+    k <- stats::rpois(length(a), 1)
+    .gini_ordered(w * k, a * k)
+  }, numeric(1))
+  stats::quantile(sims, c((1 - conf) / 2, 1 - (1 - conf) / 2),
+                  na.rm = TRUE, names = FALSE)
+}
+
+# Share of the total held by the largest few records, to say why an interval
+# is wide.
+.top_share <- function(actual, k = 10) {
+  tot <- sum(actual, na.rm = TRUE)
+  if (!isTRUE(tot > 0)) return(NA_real_)
+  sum(utils::head(sort(actual, decreasing = TRUE), k)) / tot
+}
+
+# [RATE-11]
+# The sentence that names large losses as the reason, only when they are:
+# the ten largest records carrying 10% or more of the total. A wide interval
+# on a small book or between two close models has another cause, and
+# capping is then no remedy.
+.large_loss_note <- function(actual, actual_col) {
+  top <- .top_share(actual)
+  if (!isTRUE(top >= 0.10)) return("")
+  sprintf(paste0(" The ten largest records carry %.0f%% of '%s'; capping ",
+                 "large losses narrows the interval, provided the models ",
+                 "are compared on the same capped losses."), 100 * top,
+          actual_col)
+}
+
+# [RATE-11] The bootstrap arguments, checked once for every function that
+# takes them.
+.check_boot <- function(n_boot, conf_level, fn) {
+  if (!is.numeric(n_boot) || length(n_boot) != 1 || !is.finite(n_boot) ||
+      n_boot < 0 || n_boot != round(n_boot))
+    stop(fn, ": 'n_boot' must be a whole number, 0 or more.", call. = FALSE)
+  if (!is.numeric(conf_level) || length(conf_level) != 1 ||
+      !is.finite(conf_level) || conf_level <= 0 || conf_level >= 1)
+    stop(fn, ": 'conf_level' must be a number between 0 and 1.",
+         call. = FALSE)
+  invisible(TRUE)
+}
+
+# [RATE-05]
+# Why rows were left out, counted per reason. A single "non-finite or
+# non-positive rate/exposure" reported a missing loss as an exposure
+# problem. `flags` is a named list of logical vectors, TRUE where the row
+# fails that test; a row can count under more than one reason.
+.drop_reasons <- function(flags) {
+  why <- vapply(flags, function(f) sum(f, na.rm = TRUE), numeric(1))
+  why <- why[why > 0]
+  paste(sprintf("%s: %d", names(why), as.integer(why)), collapse = ", ")
 }
 
 # [RT-04]
@@ -592,7 +839,7 @@
                                  data = src) == pv)) return("cat")
   }
   for (m in models) if (pv %in% .rhs_vars(m)) {
-    md <- if (is.data.frame(m$data)) m$data else NULL
+    md <- .model_data(m)
     if (!is.null(md) && pv %in% names(md) && is.numeric(md[[pv]]))
       return("cont")
   }
@@ -629,8 +876,8 @@
   maps <- list()
   for (nm in names(owners)) {
     m   <- owners[[nm]]
-    # a model fitted without data = carries its environment here, not a table
-    src <- if (is.data.frame(m$data)) .as_df(m$data) else NULL
+    # the data the model was fitted on, also for glm.nb() [DATA-05]
+    src <- .as_df(.model_data(m))
     if (is.null(src)) {
       if (have) next
       stop(fn, ": '", a, "' is not a column of 'data'. It could be taken ",
@@ -771,4 +1018,185 @@
   comps <- unique(unlist(strsplit(labs, ":", fixed = TRUE)))
   bv    <- unique(vapply(comps, .term_base_var, character(1), data = data))
   intersect(bv, names(data))
+}
+
+# [RT-10]
+# Rows of a prediction frame a model can be asked about: none of its factor
+# terms holds a value the model was not fitted on.
+.predictable_rows <- function(model, newd) {
+  un <- .unseen_levels(model, newd)
+  if (!length(un)) return(rep(TRUE, nrow(newd)))
+  !Reduce(`|`, lapply(un, `[[`, "rows"))
+}
+
+# [DIAG-06]
+# Mean and variance of each row's deviance residual under the fitted model.
+# A deviance residual is not centred: for a Poisson count with a small mean
+# it is negative on average (a claim-free row has d = -sqrt(2 mu)), so the
+# binned mean of a correct model sits below zero, and with a band of
+# 2 sqrt(phi / n) every bin falls outside it. Measured on a correct Poisson
+# book of 60,000 rows: mean binned residual -0.220 against a band of 0.058,
+# 50 of 50 bins outside. The moments depend on one parameter per family,
+# so they are computed exactly on a grid of it and interpolated. Returns
+# NULL for a family without a closed form here.
+.dev_resid_moments <- function(model) {
+  fam <- family(model)
+  fname <- fam$family
+  mu  <- as.numeric(stats::fitted(model))
+  w   <- as.numeric(model$prior.weights)
+  if (length(w) != length(mu)) w <- rep(1, length(mu))
+  phi <- sum(stats::residuals(model, type = "pearson")^2) / model$df.residual
+
+  on_grid <- function(par, fun, n_grid = 200) {
+    lo <- min(par); hi <- max(par)
+    g  <- if (hi / lo < 1 + 1e-9) lo else
+      exp(seq(log(lo), log(hi), length.out = n_grid))
+    m  <- matrix(vapply(g, fun, numeric(2)), nrow = 2)
+    if (length(g) == 1)
+      return(list(mean = rep(m[1, 1], length(par)),
+                  var  = rep(m[2, 1], length(par))))
+    list(mean = stats::approx(log(g), m[1, ], log(par), rule = 2)$y,
+         var  = stats::approx(log(g), m[2, ], log(par), rule = 2)$y)
+  }
+  moments <- function(d, p) {
+    m1 <- sum(p * d)
+    c(m1, max(sum(p * d^2) - m1^2, 0))
+  }
+
+  if (fname %in% c("poisson", "quasipoisson")) {
+    lam <- pmax(mu * w, 1e-12)
+    out <- on_grid(lam, function(l) {
+      y <- 0:(stats::qpois(1 - 1e-12, l) + 5)
+      d <- sign(y - l) * sqrt(pmax(2 * (ifelse(y > 0, y * log(y / l), 0) -
+                                          (y - l)), 0))
+      moments(d, stats::dpois(y, l))
+    })
+    out$var <- out$var * phi
+    return(out)
+  }
+  th <- .nb_theta(model)
+  if (!is.null(th) && all(abs(w - 1) < 1e-12)) {
+    out <- on_grid(pmax(mu, 1e-12), function(m) {
+      y <- 0:(stats::qnbinom(1 - 1e-12, size = th, mu = m) + 5)
+      d <- sign(y - m) * sqrt(pmax(2 * (ifelse(y > 0, y * log(y / m), 0) -
+                                          (y + th) * log((y + th) / (m + th))),
+                                   0))
+      moments(d, stats::dnbinom(y, size = th, mu = m))
+    })
+    out$var <- out$var * phi
+    return(out)
+  }
+  if (identical(fname, "binomial")) {
+    mm <- pmax(round(w), 1)
+    if (length(unique(mm)) > 20) return(NULL)
+    mean_ <- var_ <- numeric(length(mu))
+    for (m in unique(mm)) {
+      i <- mm == m
+      k <- 0:m
+      r <- on_grid(pmin(pmax(mu[i], 1e-9), 1 - 1e-9), function(p) {
+        yk <- k / m
+        d  <- sign(yk - p) * sqrt(pmax(2 * m * (
+          ifelse(yk > 0, yk * log(yk / p), 0) +
+          ifelse(yk < 1, (1 - yk) * log((1 - yk) / (1 - p)), 0)), 0))
+        moments(d, stats::dbinom(k, m, p))
+      })
+      mean_[i] <- r$mean; var_[i] <- r$var
+    }
+    return(list(mean = mean_, var = var_ * phi))
+  }
+  if (identical(fname, "Gamma")) {
+    # y / mu ~ Gamma(shape = w / phi, rate = w / phi), so the moments depend
+    # on the prior weight alone: E[d^2] has a closed form, E[d] is integrated
+    gam <- function(wt) {
+      k  <- wt / phi
+      f  <- function(r) sign(r - 1) * sqrt(pmax(2 * wt * (r - 1 - log(r)), 0)) *
+        stats::dgamma(r, shape = k, rate = k)
+      e1 <- tryCatch(stats::integrate(f, 0, 1)$value +
+                       stats::integrate(f, 1, Inf)$value,
+                     error = function(e) NA_real_)
+      e2 <- -2 * wt * (digamma(k) - log(k))
+      c(e1, max(e2 - e1^2, 0))
+    }
+    uw <- unique(w)
+    if (length(uw) <= 50) {
+      m <- vapply(uw, gam, numeric(2))
+      idx <- match(w, uw)
+      return(list(mean = m[1, idx], var = m[2, idx]))
+    }
+    return(on_grid(pmax(w, 1e-12), gam, n_grid = 60))
+  }
+  if (identical(fname, "gaussian"))
+    return(list(mean = rep(0, length(mu)), var = rep(phi, length(mu))))
+  NULL
+}
+
+# [DIAG-08]
+# Theta of a negative binomial fit, or NULL. MASS::glm.nb() stores it as
+# model$theta; a glm() with family = MASS::negative.binomial(theta) only
+# has it in the family's environment, which is where MASS keeps it as well.
+.nb_theta <- function(model) {
+  fam <- family(model)
+  if (!grepl("^Negative Binomial", fam$family)) return(NULL)
+  th <- if (is.numeric(model$theta)) model$theta else
+    tryCatch(get(".Theta", envir = environment(fam$variance),
+                 inherits = FALSE), error = function(e) NULL)
+  if (is.numeric(th) && length(th) == 1 && is.finite(th) && th > 0) th
+  else NULL
+}
+
+# [RT-13]
+# Claims without payment. A record with claims but no loss is counted by a
+# frequency model on the claim count, while a Gamma severity cannot take a
+# zero, so the zero amounts leave the severity data and frequency x severity
+# overstates the risk premium by their share. Measured with 15% nil claims:
+# predicted over actual losses 1.153. Only records whose every claim is nil
+# are visible here, so the share reported is a lower bound.
+.nil_claims_warning <- function(model_freq, model_sev, data, claims_col,
+                                loss_col, fn) {
+  if (is.null(model_freq) || is.null(model_sev)) return(invisible(NULL))
+  if (!all(c(claims_col, loss_col) %in% names(data))) return(invisible(NULL))
+  if (!claims_col %in% all.vars(formula(model_freq)[[2]]))
+    return(invisible(NULL))
+  cl  <- suppressWarnings(as.numeric(data[[claims_col]]))
+  ls  <- suppressWarnings(as.numeric(data[[loss_col]]))
+  tot <- sum(cl, na.rm = TRUE)
+  if (!isTRUE(tot > 0)) return(invisible(NULL))
+  nil <- !is.na(cl) & !is.na(ls) & cl > 0 & ls == 0
+  share <- sum(cl[nil]) / tot
+  if (share >= 0.01)
+    warning(fn, ": at least ", sprintf("%.1f%%", 100 * share), " of the ",
+            "claims in '", claims_col, "' sit in records without payment ('",
+            loss_col, "' = 0). The frequency model counts them, while a ",
+            "severity model fitted on positive amounts never predicts a zero, ",
+            "so frequency x severity overstates the risk premium by about ",
+            "that share. Count only paid claims in the frequency model, or ",
+            "model the share of claims without payment separately.",
+            call. = FALSE)
+  invisible(NULL)
+}
+
+# [RATE-10]
+# With the accounting year as a rating factor every policy is priced at the
+# level of its own year. Against a current premium that puts inflation into
+# the dislocation: measured, a rate-level change of +11.1% on the historic
+# years against +34.7% with every policy at the tariff year. Two model sets
+# that both use the year price each policy at the same year on both sides,
+# which is like for like, so the warning is for a premium column or for a
+# year on one side only. `old_models` is NULL for a premium column.
+.year_warning <- function(new_models, old_models, year_col, at, fn) {
+  if (is.null(year_col) || (!is.null(at) && year_col %in% names(at)))
+    return(invisible(NULL))
+  uses <- function(ms) any(vapply(Filter(Negate(is.null), ms), function(m)
+    year_col %in% .rhs_vars(m), logical(1)))
+  u_new <- uses(new_models)
+  u_old <- !is.null(old_models) && uses(old_models)
+  against <- if (is.null(old_models)) "a current premium"
+             else "a tariff without the year"
+  if ((u_new && !u_old) || (u_old && !u_new))
+    warning(fn, ": the ", if (u_new) "new" else "old", " models use '",
+            year_col, "' as a rating factor, so every policy is priced at ",
+            "the level of its own year. Against ", against, " that mixes ",
+            "inflation into the comparison; price every policy at the tariff ",
+            "year with at = list(", year_col, " = <year>).", call. = FALSE)
+  invisible(NULL)
 }
