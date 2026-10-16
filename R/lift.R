@@ -86,6 +86,7 @@ model_lift <- function(model_freq = NULL, model_sev = NULL, data = NULL,
       is.na(keep_offsets))
     stop("model_lift: 'keep_offsets' must be TRUE or FALSE.", call. = FALSE)
 
+  # [RATE-07]
   # The weight has to be the denominator the prediction is a rate over. A
   # severity model predicts a mean per claim, so weighting it by exposure
   # multiplies a per-claim amount by a per-year one and the totals do not
@@ -112,6 +113,7 @@ model_lift <- function(model_freq = NULL, model_sev = NULL, data = NULL,
   }
   .check_cols(data, c(actual_col, exposure_col, weight_col), "model_lift")
 
+  # [OFF-05]
   rate <- .model_rate(model_freq, data, exposure_col, "model_lift",
                       keep_offsets) *
           .model_rate(model_sev,  data, exposure_col, "model_lift",
@@ -304,6 +306,7 @@ double_lift <- function(data,
 
   .check_ae_scale(sum(act), sum(old * w), "double_lift", actual_col)
 
+  # [RATE-03]
   # The rate-level difference is a property of the two tariffs, not of the
   # decision to rebase, so it is measured before any scaling. Deriving it
   # from scale_f would report exactly 0 whenever rebase = FALSE, which is
@@ -330,6 +333,7 @@ double_lift <- function(data,
     AE_Old     = ifelse(agg$PredOld > 0, agg$Actual / agg$PredOld, NA_real_),
     stringsAsFactors = FALSE)
 
+  # [RATE-09]
   # Mean absolute distance from 1: the smaller, the better calibrated the
   # model is across the range where the two disagree
   mad_new <- mean(abs(tbl$AE_New - 1), na.rm = TRUE)

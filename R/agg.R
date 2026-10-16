@@ -33,6 +33,7 @@ agg_all <- function(d, col, by_year,
   .check_cols(d, c(col, exposure_col, claims_col, loss_col,
                    if (by_year) year_col), "agg_all")
 
+  # [DATA-02]
   # Report data-quality issues explicitly instead of silently averaging away
   for (cc in c(exposure_col, claims_col, loss_col)) {
     n_na <- sum(is.na(d[[cc]]))
@@ -41,6 +42,7 @@ agg_all <- function(d, col, by_year,
               "' are ignored (na.rm = TRUE).", call. = FALSE)
   }
 
+  # [DATA-02]
   # The output columns are fixed names, so grouping on one of them would
   # produce a data.frame with two columns of the same name rather than an
   # error, and every later rename or lookup would then pick the wrong one.

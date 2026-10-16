@@ -1,3 +1,4 @@
+# [EXP-02]
 # The rating table keeps Level as character, because a categorical level
 # is text. For a continuous variable that same column holds stringified
 # numbers, and Excel then flags every cell as "number stored as text". Put
@@ -54,6 +55,7 @@ export_rating_table <- function(rating_tbl, file = "rating_table.xlsx",
 
   wb         <- openxlsx::createWorkbook()
   used_names <- character(0)
+  # [EXP-02]
   # Excel treats sheet names case-insensitively, so REGIO and Regio would
   # otherwise both be accepted here and produce a corrupt workbook
   sheet_name <- function(nm) {
@@ -135,6 +137,7 @@ export_rating_table <- function(rating_tbl, file = "rating_table.xlsx",
   openxlsx::writeData(wb, sn, ov, headerStyle = st_header)
   openxlsx::setColWidths(wb, sn, cols = 1:2, widths = "auto")
 
+  # [EXP-01] [EXP-03]
   # Tariff sheet: every factor of every variable under one another, with a
   # single lookup key, so a premium can be assembled with VLOOKUP instead
   # of hopping between sheets ------------------------------------------------
@@ -186,6 +189,7 @@ export_rating_table <- function(rating_tbl, file = "rating_table.xlsx",
     write_sheet(v, d)
   }
 
+  # [EXP-01]
   # Interaction sheets: long table + premium-factor matrix ----------------------
   keep_int <- intersect(c("Level", "Group", "IsBase", "Exposure",
                           "ClaimCount", "IsThin",

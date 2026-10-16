@@ -126,6 +126,7 @@ premium_impact <- function(data,
     s & !is.na(s)
   }
 
+  # [OFF-05]
   r <- .old_new_rates(data, model_freq_new, model_sev_new,
                       model_freq_old, model_sev_old, old_premium_col,
                       old_premium_basis, exposure_col, "premium_impact",
@@ -145,6 +146,7 @@ premium_impact <- function(data,
   idx      <- which(keep)
   new_rate <- new_rate[keep]; old_rate <- old_rate[keep]; expo <- expo[keep]
 
+  # [RATE-03]
   old_total   <- sum(old_rate * expo)
   new_total   <- sum(new_rate * expo)
   rate_change <- new_total / old_total - 1
@@ -171,6 +173,7 @@ premium_impact <- function(data,
   policy$ChangePct      <- change
   rownames(policy) <- NULL
 
+  # [RATE-04]
   # Contribution decomposition. The portfolio is the same on both sides, so
   # there is no mix effect to isolate; what can be decomposed is who causes
   # the overall change. Contribution = share x change, and the levels of one
@@ -192,6 +195,7 @@ premium_impact <- function(data,
     rownames(by_level) <- NULL
   }
 
+  # [RATE-05]
   # Spotlight: the same headline numbers for a subset, computed AFTER the
   # book-level rebase, so it shows how that subset moves relative to the
   # book rather than relative to itself.
@@ -264,6 +268,7 @@ premium_impact <- function(data,
 
   med <- qs[3]
 
+  # [RATE-05]
   # Pre-bin the histogram in R: a plotly histogram trace would embed all
   # raw per-policy values in the widget (tens of MB on large portfolios);
   # 60 pre-computed bars keep the file small regardless of n.

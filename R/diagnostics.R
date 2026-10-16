@@ -22,6 +22,7 @@ glm_diagnostics <- function(model_freq = NULL, model_sev = NULL) {
       stop("glm_diagnostics: '", model_name, "' must be a glm object.",
            call. = FALSE)
     fam  <- family(model)
+    # [DIAG-01]
     disp <- sum(residuals(model, type = "pearson")^2) / model$df.residual
 
     if (fam$family %in% c("poisson", "binomial") && disp > 1.2)
@@ -134,6 +135,7 @@ glm_collinearity <- function(model, threshold = 3) {
     return(empty)
   }
 
+  # [DIAG-02]
   # Log-determinants: with correlated spline bases the determinant of a
   # 20-column correlation matrix underflows to zero long before the model
   # is anywhere near singular.
@@ -248,6 +250,7 @@ plot_glm_residuals <- function(model, predictor = NULL, n_bins = 50,
       n      = n(),
       .groups = "drop"
     ) %>%
+    # [DIAG-03]
     mutate(band = 2 * sqrt(disp / n))
   agg <- if (x_numeric) agg %>% arrange(x_plot) else agg %>% arrange(bin_group)
 
@@ -280,6 +283,7 @@ plot_glm_residuals <- function(model, predictor = NULL, n_bins = 50,
                 fill = "tonexty", fillcolor = "rgba(168,200,224,0.25)",
                 name = "\u00b12\u00b7SE", legendgroup = "band",
                 showlegend = FALSE, hoverinfo = "skip") %>%
+      # [DIAG-03]
       # Markers, not a line. Bin means are independent draws, and joining
       # them invites the eye to read a trend into what is mostly noise -
       # the band is what says whether a point means anything.

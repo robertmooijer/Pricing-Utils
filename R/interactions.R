@@ -1,5 +1,6 @@
 # Interaction detection -----------------------------------------------------
 #
+# [INT-01]
 # One-way A/E checks cannot reveal a missing interaction.
 #
 # The score equations weight each observation by (dmu/deta)/V(mu), which is
@@ -100,6 +101,7 @@ plot_residual_heatmap <- function(model, var_x, var_y,
   txt <- matrix(NA_character_, length(ly), length(lx))
   pos <- cbind(iy, ix)
 
+  # [INT-02]
   # Thin cells: no colour, only a marker and their volume in the tooltip
   z[pos] <- ifelse(cells$IsThin, NA_real_, cells$AE)
   txt[pos] <- paste0(
@@ -207,6 +209,7 @@ detect_interactions <- function(model, vars = NULL, n_bins = 10,
 
   if (!inherits(model, "glm"))
     stop("detect_interactions: 'model' must be a glm object.", call. = FALSE)
+  # [CONV-08]
   if (!is.null(seed)) set.seed(seed)
 
   parts <- .glm_ae_parts(model, "detect_interactions")
@@ -225,6 +228,7 @@ detect_interactions <- function(model, vars = NULL, n_bins = 10,
     .group_values(.glm_var_values(parts, v, "detect_interactions"), n_bins))
   names(grp) <- vars
 
+  # [INT-03]
   # Match E to A's row and column margins (iterative proportional fitting).
   # What is left is the interaction, not the main effects.
   rake <- function(A, E, iter = 50, tol = 1e-9) {
@@ -242,6 +246,7 @@ detect_interactions <- function(model, vars = NULL, n_bins = 10,
     2 * sum(ifelse(A[ok] > 0, A[ok] * log(A[ok] / E[ok]), 0) - (A[ok] - E[ok]))
   }
 
+  # [INT-03]
   # The resampling null needs the aggregated actuals to be Poisson counts.
   # That depends on the family and the response, not on whether the model
   # carries an exposure offset.
@@ -286,6 +291,7 @@ detect_interactions <- function(model, vars = NULL, n_bins = 10,
 
     ae   <- ifelse(E > 0, A / E, NA_real_)
     ae[C < min_claims] <- NA_real_
+    # [INT-04]
     worst <- if (all(is.na(ae))) NA_integer_ else which.max(abs(ae - 1))
 
     data.frame(

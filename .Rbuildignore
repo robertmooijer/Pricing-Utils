@@ -7,3 +7,4 @@
 ^test_glm_utils\.R$
 ^.*\.Rproj$
 ^\.Rproj\.user$
+^TECHNICAL\.md$

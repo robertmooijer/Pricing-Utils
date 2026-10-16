@@ -72,6 +72,7 @@ make_plot <- function(data, col, metric = c("Frequency", "Severity"),
   # Robust column reference for plotly (metric may contain spaces)
   y_metric <- stats::as.formula(paste0("~`", metric, "`"))
 
+  # [DATA-04]
   # With a character/factor X-axis show markers only (no line connecting
   # categories). Numeric columns with few unique values (e.g. integer-coded
   # categories) are also treated as discrete.
@@ -82,6 +83,7 @@ make_plot <- function(data, col, metric = c("Frequency", "Severity"),
   # Sort by X (and Year when split) so the line runs cleanly
   agg <- if (by_year) agg %>% arrange(Year, .x) else agg %>% arrange(.x)
 
+  # [DATA-03]
   # Volume bars: the denominator the metric is actually built on, so the
   # bar says how solid each point is. A severity is a mean per claim, so
   # its bar is the claim count; exposure would be the wrong denominator

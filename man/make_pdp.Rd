@@ -54,9 +54,11 @@ line and the PDP line.
 Computes the PDP on the response scale: for each grid value of \code{pred_var}
 the whole training data is set to that value, predicted with
 \code{predict(type = "response")}, and the weighted arithmetic mean is taken
-(frequency: exposure-weighted; severity: claim-weighted). The offset is
-neutralised by setting \code{exposure_col} to 1, so the PDP is a frequency per
-unit of exposure and directly comparable to the observed line.
+(frequency: exposure-weighted; severity: claim-weighted). The whole
+offset is subtracted on the link scale, so the PDP is a frequency per
+unit of exposure and directly comparable to the observed line. That
+includes a second offset such as a bonus-malus scale: the PDP is at
+BM = 1, the class without discount, like the rating table.
 (\code{exp(mean(link))} would be a geometric mean, including the offset, and
 systematically biased low.)
 }

@@ -95,6 +95,7 @@ add_groupings <- function(data, model_freq = NULL, model_sev = NULL,
          "list(Stedelijkheid = \"Stedelijkheid_groep\").", call. = FALSE)
   .check_cols(data, names(merge_vars), fn)
 
+  # [MV-10]
   used <- unique(c(if (!is.null(model_freq)) .rhs_vars(model_freq),
                    if (!is.null(model_sev))  .rhs_vars(model_sev)))
   is_dt <- data.table::is.data.table(data)

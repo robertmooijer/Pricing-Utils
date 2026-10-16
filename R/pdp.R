@@ -3,9 +3,11 @@
 #' Computes the PDP on the response scale: for each grid value of `pred_var`
 #' the whole training data is set to that value, predicted with
 #' `predict(type = "response")`, and the weighted arithmetic mean is taken
-#' (frequency: exposure-weighted; severity: claim-weighted). The offset is
-#' neutralised by setting `exposure_col` to 1, so the PDP is a frequency per
-#' unit of exposure and directly comparable to the observed line.
+#' (frequency: exposure-weighted; severity: claim-weighted). The whole
+#' offset is subtracted on the link scale, so the PDP is a frequency per
+#' unit of exposure and directly comparable to the observed line. That
+#' includes a second offset such as a bonus-malus scale: the PDP is at
+#' BM = 1, the class without discount, like the rating table.
 #' (`exp(mean(link))` would be a geometric mean, including the offset, and
 #' systematically biased low.)
 #'
@@ -113,6 +115,7 @@ make_pdp <- function(model,
         warning("make_pdp: the model's offset is not a logarithm, so ",
                 "exp(offset) is not an exposure and the weighting is ",
                 "unreliable.", call. = FALSE)
+      # [PDP-02] [OFF-08]
       # The observed line and the bars are already built from
       # `exposure_col`, so the PDP average is weighted by the same column
       # rather than by exp(offset). The two differ once a model carries a
@@ -132,6 +135,7 @@ make_pdp <- function(model,
     tr$weights                        # severity: prior weights = claim counts
   }
 
+  # [OFF-06]
   # Neutralise the offset, so the PDP is a frequency per unit of exposure
   # and comparable to the observed line. The offset variables are pinned to
   # a constant here because that is what lets the data collapse to unique
@@ -157,6 +161,7 @@ make_pdp <- function(model,
               "line and the bars use '", exposure_col, "'.", call. = FALSE)
   }
 
+  # [PDP-04]
   # Grid ---------------------------------------------------------------------
   x_train <- train_df[[pred_var]]
   is_discrete <- is.character(x_train) || is.factor(x_train) ||
@@ -173,6 +178,7 @@ make_pdp <- function(model,
         length.out = grid_res)
   }
 
+  # [PDP-03]
   # Collapse to unique predictor profiles (performance) ----------------------
   # predict() only depends on the model's predictor columns. Rows that
   # share the same values for all predictors other than pred_var receive
@@ -200,6 +206,7 @@ make_pdp <- function(model,
   prof$.w  <- NULL
 
   # PDP: weighted mean response prediction per grid value --------------------
+  # [PDP-01]
   # Deliberately an arithmetic mean on the response scale; exp(mean(link))
   # would be a geometric mean that is systematically biased low.
   yhat <- vapply(seq_along(grid_vals), function(i) {

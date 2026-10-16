@@ -1,5 +1,6 @@
 # Feature screening with a boosted challenger --------------------------------
 #
+# [SCR-01]
 # The booster never becomes a pricing model here. It is fitted with the GLM
 # as an offset, so it can only model what the GLM leaves behind, and every
 # number it returns is a diagnostic about the GLM.
@@ -169,6 +170,7 @@ screen_features <- function(model, features = NULL,
   if (length(split) != 3 || any(split <= 0) || abs(sum(split) - 1) > 1e-8)
     stop("screen_features: 'split' must be three positive shares summing to 1.",
          call. = FALSE)
+  # [CONV-08]
   if (!is.null(seed)) set.seed(seed)
   if (is.null(nthread)) nthread <- .default_nthread()
 
@@ -178,6 +180,7 @@ screen_features <- function(model, features = NULL,
          "with a 'data =' argument.", call. = FALSE)
   d <- tr$data
 
+  # [SCR-06]
   # Sub-sample before anything else: every later stage is linear in rows
   # NULL still means "no cap", so calls written against the old default of
   # 1e6 keep working; Inf is the same thing said in a way that does not
@@ -211,6 +214,7 @@ screen_features <- function(model, features = NULL,
   fam <- family(model)
   counts <- !is.null(tr$offset) && any(tr$offset != 0) &&
             identical(fam$link, "log")
+  # [SCR-02]
   objective <- if (fam$family %in% c("poisson", "quasipoisson") && counts) {
     "count:poisson"
   } else if (fam$family == "Gamma" && identical(fam$link, "log")) {
@@ -231,6 +235,7 @@ screen_features <- function(model, features = NULL,
             paste(missing_f, collapse = ", "), call. = FALSE)
     features <- intersect(features, names(d))
   }
+  # [SCR-07]
   # Classify each candidate, so a dropped column says why it was dropped
   status <- vapply(features, function(f) {
     x <- d[[f]]
@@ -260,6 +265,7 @@ screen_features <- function(model, features = NULL,
 
   in_model <- intersect(features, .rhs_vars(model))
 
+  # [SCR-03]
   # Split, and refit the baseline on the training part so that the
   # comparison against the booster is out of sample on both sides
   n <- nrow(d)
@@ -295,6 +301,7 @@ screen_features <- function(model, features = NULL,
   # Response and weights carried explicitly, so a subset of rows (the SHAP
   # sample) stays consistent with its labels
   y_all <- as.numeric(tr$mf[[1]])
+  # [SCR-02]
   w_all <- if (counts) rep(1, n) else tr$weights
   y_tr <- y_all[grp == "train"]; w_tr <- w_all[grp == "train"]
   y_va <- y_all[grp == "valid"]; w_va <- w_all[grp == "valid"]
@@ -358,6 +365,7 @@ screen_features <- function(model, features = NULL,
     Change = c("", sprintf("%+.2f%%", p1), sprintf("%+.2f%%", p2)),
     stringsAsFactors = FALSE)
 
+  # [SCR-04]
   verdict <- if (p1 < -0.1) {
     paste0("The baseline is missing main effects (depth 1 improves the fit ",
            "by ", sprintf("%.2f%%", -p1), "). Add them first: the ",
@@ -372,6 +380,7 @@ screen_features <- function(model, features = NULL,
     "The booster finds nothing material beyond the baseline on the test split."
   }
 
+  # [SCR-05]
   # Incremental importance: permute one feature, keep the baseline fixed --
   base_dev <- dev2
   # Shuffling the rows of a feature's column block is equivalent to
@@ -422,6 +431,7 @@ screen_features <- function(model, features = NULL,
     "add a column you know is noise, before trusting anything near the ",
     "bottom of the list.")
 
+  # [SCR-07]
   # Near-duplicate candidates split their importance ----------------------
   num_f <- features[vapply(features, function(f) is.numeric(d[[f]]),
                            logical(1))]
@@ -455,6 +465,7 @@ screen_features <- function(model, features = NULL,
   # SHAP interaction ranking ----------------------------------------------
   interactions <- NULL
   if (max_depth > 1 && n_shap > 0) {
+    # [SCR-06]
     # The SHAP interaction array is n_shap x (k+1) x (k+1) doubles, and k
     # grows with every factor level once one-hot encoded, so cap the sample
     # at roughly 1 GB rather than let it exhaust memory.

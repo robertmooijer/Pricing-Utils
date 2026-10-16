@@ -18,6 +18,7 @@
 # normal instead, discreteness included, which is what makes a Q-Q plot
 # readable for counts at all. Verified identical to statmod::qres.pois().
 
+# [DIAG-04]
 # Dispersion the reference distribution should use. Poisson and binomial
 # fix it at 1 by assumption, and that assumption is exactly what the plot
 # is testing, so estimating it here would hide the very thing being looked
@@ -28,6 +29,7 @@
   sum(stats::residuals(model, type = "pearson")^2) / model$df.residual
 }
 
+# [DIAG-04]
 # Randomised quantile residuals. Returns NULL when the family has no
 # closed-form CDF here, so the caller can fall back and say so.
 .quantile_residuals <- function(model, fn) {
@@ -159,6 +161,7 @@ plot_glm_qq <- function(model, n_max = 5000, band = TRUE, seed = NULL,
   if (n_max < 10)
     stop("plot_glm_qq: 'n_max' must be at least 10.", call. = FALSE)
   y_range <- .check_range(y_range, "plot_glm_qq")
+  # [CONV-08]
   if (!is.null(seed)) set.seed(seed)
 
   fam <- family(model)
@@ -330,11 +333,13 @@ plot_glm_influence <- function(model, n_label = 10, data_cols = NULL,
   if (n_label < 1)
     stop("plot_glm_influence: 'n_label' must be at least 1.", call. = FALSE)
   y_range <- .check_range(y_range, "plot_glm_influence")
+  # [CONV-08]
   if (!is.null(seed)) set.seed(seed)
 
   tr <- .glm_training_data(model, "plot_glm_influence")
   n_full <- nrow(tr$mf)
 
+  # [DIAG-05]
   # Sub-sample before the QR, which is what actually costs
   if (!is.null(max_rows) && n_full > max_rows) {
     message("plot_glm_influence: refitting on a sample of ",
@@ -422,6 +427,7 @@ plot_glm_influence <- function(model, n_label = 10, data_cols = NULL,
               textfont = list(size = 9, color = ta_navy),
               hovertext = lbl(top), hoverinfo = "text")
 
+  # [DIAG-05]
   # The classic high-leverage rule, 2p/n: it still means something as a
   # reference for leverage even where Cook's own thresholds do not
   p_coef <- sum(!is.na(stats::coef(model)))

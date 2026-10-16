@@ -10,6 +10,7 @@
   invisible(TRUE)
 }
 
+# [CONV-02]
 # Normalise to a plain data.frame. A data.table reads `d[, cols]` as an
 # expression rather than a column selection, and a tibble returns a
 # one-column tibble where a vector is expected, so anything that is not
@@ -20,6 +21,7 @@
   if (!identical(class(x), "data.frame")) as.data.frame(x) else x
 }
 
+# [DATA-01]
 # Training data (original columns) aligned with the fitted rows of a glm.
 # Uses rownames matching instead of as.integer(rownames), so it also works
 # with non-numeric rownames and rows dropped by na.action.
@@ -41,6 +43,7 @@
   list(mf = mf, data = d, weights = as.numeric(pw), offset = model$offset)
 }
 
+# [AE-05]
 # The same pieces as .glm_training_data(), but evaluated on other data, so
 # a model can be held against a period it was never fitted on. The rows
 # kept are the ones the model's variables can be evaluated on; a row with
@@ -130,6 +133,7 @@
   mu <- as.numeric(predict(model, type = "response"))
   has_offset <- !is.null(tr$offset) && any(tr$offset != 0)
 
+  # [OFF-04]
   # exp(offset) is only an exposure when the offset is a logarithm. With
   # offset(Exposure) it is exp(Exposure), which is not a volume at all, so
   # the counts branch below would weight by nonsense.
@@ -140,6 +144,11 @@
             call. = FALSE)
   has_offset <- has_offset && !isTRUE(!.offset_is_log(model))
 
+  # [OFF-08] Known gap: the volume here is exp(offset). With a second offset,
+  # a bonus-malus scale, that is Exposure x BM, so the exposure the heatmap
+  # shows and MaxAE_ExposureShare in detect_interactions() are BM-weighted.
+  # The A/E is not affected: actual and expected are both counts. See
+  # TECHNICAL.md, section 4.
   out <- if (has_offset && identical(family(model)$link, "log")) {
     c(tr, list(actual = y, expected = mu, exposure = exp(tr$offset),
                claims = y, exposure_label = "Exposure", counts = TRUE))
@@ -180,6 +189,7 @@
   cut(x, breaks = brks, include.lowest = TRUE, dig.lab = 4)
 }
 
+# [OFF-01]
 # Every unevaluated offset expression the model carries.
 #
 # There are two places one can hide. Inside the formula, as
@@ -202,6 +212,7 @@
   out
 }
 
+# [OFF-02]
 # The offset's contribution to the linear predictor, evaluated on new data.
 # Derived rather than assumed, so offset(Exposure), offset(log(Months / 12)),
 # several offset terms at once and the offset = argument all come out right.
@@ -215,6 +226,7 @@
   if (!length(ex)) return(rep(0, nrow(data)))
   env <- environment(formula(model))
   v <- lapply(ex, function(e) as.numeric(eval(e, data, env)))
+  # [OFF-03]
   # An offset handed over as an already-computed vector cannot be
   # re-evaluated per row of other data: its expression is just a name, and
   # what it resolves to belongs to the rows it was fitted on. Recycling it
@@ -229,6 +241,7 @@
   Reduce(`+`, v)
 }
 
+# [OFF-02]
 # Prediction on the response scale with the offset taken back out.
 #
 # Setting the exposure column to 1 only neutralises an offset of the form
@@ -245,6 +258,7 @@
   family(model)$linkinv(eta - .offset_value(model, newdata, idx))
 }
 
+# [OFF-05]
 # Which offset expressions to take out of a rate, and which stay in.
 #
 # The exposure offset says how long a policy was on risk, which is not a
@@ -283,6 +297,7 @@
   unique(as.character(out))
 }
 
+# [OFF-04]
 # Is every offset term a logarithm? Only then is exp(offset) an exposure,
 # which the A/E and weighting code relies on.
 .offset_is_log <- function(model) {
@@ -304,6 +319,7 @@
   unique(unlist(lapply(ex, all.vars)))
 }
 
+# [SCR-06]
 # Threads to hand to the booster. R CMD check and CRAN cap what a package
 # may claim, and grabbing every core inside a check can exhaust the
 # process's thread budget outright, so honour those limits rather than
@@ -319,19 +335,23 @@
   as.integer(n)
 }
 
-# Predicted rate per unit of exposure. The offset is neutralised by setting
-# the variable the model actually offsets on to 1, so a frequency and a
-# severity model multiply to a risk premium per exposure unit. A NULL model
-# contributes a factor 1.
+# [OFF-05] [OFF-07] [OFF-09] [RATE-01]
+# Predicted rate per unit of exposure. The offset is subtracted on the link
+# scale by .predict_no_offset(), so a frequency and a severity model multiply
+# to a risk premium per exposure unit. A NULL model contributes a factor 1.
 #
-# Neutralising `exposure_col` regardless would be wrong whenever the model
+# Which part of the offset is subtracted is decided by .offset_split(): with
+# `keep_offsets = TRUE` only the expressions that mention `exposure_col`, so
+# a bonus-malus scale stays in; with FALSE, or when no offset mentions
+# `exposure_col` at all, every offset expression.
+#
+# Setting `exposure_col` to 1 instead would be wrong whenever the model
 # offsets on something else: a model fitted with offset(log(Ex)) alongside
 # an Exposure column would keep its offset intact and return a prediction
-# per record instead of a rate, silently, because the column being set to 1
-# is not the one in the linear predictor.
-#
-# With `keep_offsets = TRUE` only the exposure offset is taken out and any
-# other offset, such as a bonus-malus scale, stays in; see .offset_split().
+# per record instead of a rate, silently, because the column set to 1 is not
+# the one in the linear predictor. Following the model's own offset
+# expressions avoids that, and the warning below says the rate is then per
+# unit of that other variable.
 .model_rate <- function(model, data, exposure_col, fn, keep_offsets = TRUE) {
   if (is.null(model)) return(rep(1, nrow(data)))
   if (is.null(model$offset))
@@ -377,6 +397,7 @@
   out
 }
 
+# [RATE-01] [RATE-02]
 # Old and new rate per policy, from either two model sets or an existing
 # premium column. Shared by premium_impact() and double_lift() so the two
 # cannot drift apart.
@@ -416,6 +437,7 @@
   if (length(kept)) paste(kept, collapse = ", ") else "none"
 }
 
+# [RATE-08]
 # An overall A/E far from 1 nearly always means the prediction and
 # `actual_col` are not the same quantity: a frequency model compared
 # against loss amounts, or a risk premium against claim counts. Cheap to
@@ -432,6 +454,7 @@
   invisible(NULL)
 }
 
+# [RATE-06]
 # Bins holding roughly equal exposure, ordered by `score`. Equal exposure
 # rather than equal policy counts, so every bin carries the same weight in
 # the comparison.
@@ -459,6 +482,7 @@
   out
 }
 
+# [RATE-08]
 # Gini of the exposure-weighted Lorenz curve: cumulative share of actual
 # losses against cumulative share of exposure, ordered by the prediction.
 # 0 means no discrimination, higher means the model separates risk better.
@@ -475,6 +499,7 @@
   1 - 2 * auc
 }
 
+# [RT-04]
 # A readable step for a continuous rating grid. Aims at roughly `n` points
 # across the range and then rounds to a 1 / 2 / 5 x 10^k value, the same
 # rule an axis uses for its ticks, so a tariff lists ages 18, 19, 20 and
@@ -490,6 +515,7 @@
   step
 }
 
+# [RT-04]
 # Should a whole-number column be listed value by value? A tariff wants
 # every age, not every second age. The decision is on the values, never on
 # a step of 1 across the range: a coded column such as a sum insured can
@@ -498,6 +524,7 @@
 .list_values <- function(uv, n, integer_data)
   integer_data && length(uv) && length(uv) <= 2 * max(1, n)
 
+# [RT-04]
 # Grid over [lo, hi] in whole multiples of `step`, so the values read as
 # round numbers rather than as an offset sequence. `base` is added if the
 # clamping left it off the grid: it is the point the factors are divided
@@ -510,6 +537,7 @@
   sort(unique(c(g, base)))
 }
 
+# [RT-09]
 # Grid values as text for the Level column. as.character() switches a round
 # number to scientific notation whenever that is shorter, so a sum-insured
 # grid would read "1e+05", "2e+05" - unusable in a tariff and, worse, in
@@ -526,6 +554,7 @@
   min(max(s, lo), hi)
 }
 
+# [RT-08]
 # Underlying column of a term label: "ns(AGE, 4)" -> "AGE".
 # Backticks are stripped first, so a non-syntactic name such as
 # `AUTO GEWICHT` still matches its column. Parsing the term and taking the
@@ -550,6 +579,7 @@
 # has to be scored. make_rating_table() and add_groupings() share this, so
 # the two cannot drift apart.
 
+# [MV-06]
 # Is a source variable looked up exactly (categorical) or banded
 # (continuous)? The models say so where they can: a factor term is
 # categorical, a numeric term continuous. A source no model uses directly
@@ -571,6 +601,7 @@
   else "cat"
 }
 
+# [MV-03] [MV-10]
 # The grouped column `a` of source `pv`, for the rows of `data`: derived from
 # the data of the model that uses it when `data` does not have it, and
 # checked against that model when it does. Returns the column.
@@ -618,6 +649,7 @@
     ok <- !is.na(src[[pv]]) & !is.na(src[[a]])
     pr <- as.data.frame(unique(data.table::data.table(
       p = as.character(src[[pv]])[ok], g = as.character(src[[a]])[ok])))
+    # [MV-02]
     dup <- unique(pr$p[duplicated(pr$p)])
     if (length(dup))
       stop(fn, ": '", a, "' is not a regrouping of '", pv, "' in the data ",
@@ -628,6 +660,7 @@
   }
   if (!length(maps)) return(data[[a]])     # nothing to check it against
 
+  # [MV-04]
   # One column name, two meanings. A grouping made twice, once per dataset,
   # need not agree, and only one of the two can be in a dataset that is
   # scored. With different labels that ends in a prediction failure; with
@@ -658,6 +691,7 @@
   kind <- .source_kind(pv, models, src)
   x    <- data[[pv]]
 
+  # [MV-07]
   if (kind == "cont") {
     keys <- suppressWarnings(as.numeric(names(map)))
     o    <- order(keys); keys <- keys[o]; band <- unname(map)[o]
@@ -714,6 +748,7 @@
           else vals
 
   if (!have) return(vals)
+  # [MV-05]
   # Already there: checked, not overwritten. A column that disagrees with
   # the model would have that model scored on a grouping it never saw.
   cur <- as.character(data[[a]])

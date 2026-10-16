@@ -166,6 +166,7 @@ plot_glm_predictor <- function(model, predictor,
     stop(paste0("Predictor '", predictor, "' not found."))
   }
 
+  # [AE-07]
   # model.frame() holds a spline or poly term as a matrix column, which
   # would fail several frames further down with "replacement has 0 rows".
   # Name the column to ask for instead.
@@ -179,11 +180,13 @@ plot_glm_predictor <- function(model, predictor,
   fam        <- family(model)
   has_offset <- !is.null(tr$offset) && any(tr$offset != 0)
 
+  # [AE-01] [OFF-04]
   # exp(offset) recovers an exposure only when the link is log AND the
   # offset is itself a logarithm; with offset(Exposure) it is exp(Exposure),
   # which is not a volume. Both conditions are read off the model.
   off_is_log <- isTRUE(.offset_is_log(model))
   if (has_offset && identical(fam$link, "log") && off_is_log) {
+    # [OFF-08]
     # Prefer the exposure column itself over exp(offset). With one offset
     # the two are the same number, but a model may carry a second known
     # relativity as an offset - a bonus-malus scale, say - and then
@@ -224,6 +227,7 @@ plot_glm_predictor <- function(model, predictor,
                 isTRUE(any(w != 1, na.rm = TRUE))
   if (!is.null(weight_label)) w_title <- weight_label
 
+  # [AE-05]
   # On other data the prediction has to be asked for row by row; the
   # offset rides along with it, so both series stay counts for a count
   # model exactly as they are in-sample.
@@ -236,6 +240,7 @@ plot_glm_predictor <- function(model, predictor,
     predicted = mu,
     weight    = w
   )
+  # [AE-03]
   # Sampling variance of the response, from the family's own variance
   # function, so the error bars follow whatever family was fitted rather
   # than assume Poisson. Multiplied by the prior weight because a GLM
@@ -247,6 +252,7 @@ plot_glm_predictor <- function(model, predictor,
 
   # Grouping
   if (is.numeric(df$x_var)) {
+    # [AE-02]
     x_binned <- length(unique(df$x_var[!is.na(df$x_var)])) > n_bins
     if (!x_binned) {
       # Fewer distinct values than requested bins: do not bin at all. One
@@ -315,6 +321,7 @@ plot_glm_predictor <- function(model, predictor,
 
   scatter_mode <- if (x_is_numeric) "lines+markers" else "markers"
 
+  # [AE-06]
   # The ratio of the two series, which is the same A/E the heatmap and the
   # lift report: counts give sum(y) / sum(mu), a weighted model the ratio
   # of the two weighted means, which is sum(w y) / sum(w mu). A bin whose

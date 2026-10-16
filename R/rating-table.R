@@ -152,6 +152,7 @@ make_rating_table <- function(model_freq = NULL,
   if (min_claims < 0)
     stop("make_rating_table: 'min_claims' must not be negative.")
 
+  # [OFF-07]
   # Multiplicative factors are only valid for log-link models
   check_link <- function(model, model_name) {
     if (is.null(model)) return(invisible(NULL))
@@ -164,6 +165,7 @@ make_rating_table <- function(model_freq = NULL,
   check_link(model_freq, "frequency")
   check_link(model_sev,  "severity")
 
+  # [OFF-06] [OFF-09]
   # Every offset variable is held at 1 in the base row, so the intercept is
   # per unit of whatever the model actually offsets on. If that is not
   # `exposure_col`, the Exposure column of the table measures something
@@ -180,6 +182,7 @@ make_rating_table <- function(model_freq = NULL,
   # Underlying column of a term label (shared helper, bound to `data`)
   base_var <- function(term) .term_base_var(term, data)
 
+  # [RT-08]
   # xlevels per model, keyed by the underlying column name, so that inline
   # transformations such as factor(YEAR) are also recognised as categorical.
   xlev_map <- function(model) {
@@ -198,6 +201,7 @@ make_rating_table <- function(model_freq = NULL,
     if (!is.null(xlev_all[[bv]])) xlev_all[[bv]] else levels(factor(data[[bv]]))
   }
 
+  # [MV-01]
   # One rating factor under two column names --------------------------------
   # A variable can enter the frequency model under its own name and the
   # severity model as a regrouping of itself - urbanisation 1 to 5 against
@@ -229,11 +233,13 @@ make_rating_table <- function(model_freq = NULL,
           stop("make_rating_table: '", a, "' is both a regrouping of '", pv,
                "' and the variable '", paste(alias_of[[a]], collapse = ", "),
                "' is merged into; chains are not supported.", call. = FALSE)
+        # [MV-03]
         # Derived from the model that uses it when `data` lacks it, checked
         # against that model when `data` has it; shared with add_groupings()
         data[[a]] <- .grouping_column(data, pv, a, model_freq, model_sev,
                                       "make_rating_table")
         data.table::set(d_dt, j = a, value = data[[a]])
+        # [MV-02]
         # The relation has to be a function of the variable: one group per
         # value. If a value occurs with two groups there is no single
         # factor to put on that row, and silently taking the first would
@@ -262,6 +268,7 @@ make_rating_table <- function(model_freq = NULL,
     }
   }
 
+  # [MV-07]
   # The alias value belonging to each value of the variable it regroups.
   # A categorical variable looks its level up. A continuous grid can hold a
   # value that does not occur in the data, so there it takes the band of
@@ -283,6 +290,7 @@ make_rating_table <- function(model_freq = NULL,
     out
   }
 
+  # [MV-01]
   # Put a variable into a prediction frame, together with every column that
   # is a regrouping of it: if the two models use different spellings of one
   # rating factor, both have to move or the merged block would hold one
@@ -298,13 +306,16 @@ make_rating_table <- function(model_freq = NULL,
   # Every spelling of one rating factor, to test a model against.
   spellings <- function(bv) c(bv, alias_of[[bv]])
 
+  # [RT-02]
   # Base value per variable (raw value, not yet coerced):
   #   categorical -> reference level; continuous -> median; exposure -> 1
   base_value_raw <- function(bv) {
+    # [MV-09]
     # A regrouped column sits at the group its variable's base value falls
     # in, so the base row is a policy that could exist
     if (!is.null(merge_map[[bv]]))
       return(alias_values(bv, base_value_raw(merge_map[[bv]])))
+    # [OFF-06]
     # Any offset variable sits at 1, not just the one named by
     # exposure_col, so the intercept is a rate per unit of exposure
     # whatever that column happens to be called
@@ -330,8 +341,13 @@ make_rating_table <- function(model_freq = NULL,
     }
   }
 
-  # Base row for a model: all predictors at their base value, with the
-  # exposure column set to 1 so the intercept is a value per exposure unit.
+  # [RT-01] [RT-09]
+  # Base row for a model: all predictors at their base value and every
+  # offset variable at 1 (base_value_raw()). The factors are ratios against
+  # this row, so the offset cancels in them; the intercept is this row's
+  # prediction with the whole offset subtracted on the link scale
+  # (intercept_val()), so it is per unit of exposure whatever form the
+  # offset takes.
   base_df_for <- function(model) {
     vars <- .rhs_vars(model)
     missing_vars <- setdiff(vars, names(data))
@@ -345,6 +361,7 @@ make_rating_table <- function(model_freq = NULL,
     as.data.frame(row, stringsAsFactors = FALSE, check.names = FALSE)
   }
 
+  # [RT-01] [RT-03]
   # Factors for one variable: prediction on grid / prediction on base row.
   # Both with all other predictors at their base value, hence consistent
   # with intercept_val. Variable not in the model -> neutral factor 1.
@@ -361,6 +378,7 @@ make_rating_table <- function(model_freq = NULL,
     preds / ref
   }
 
+  # [RT-06]
   # Joint relativity over a 2D grid (vx x vg), rest at base, scaled to the
   # base cell (index i_base). vx varies fastest.
   predict_factor_2d <- function(model, vx, gx, vg, gg, i_base) {
@@ -375,6 +393,7 @@ make_rating_table <- function(model_freq = NULL,
     preds / preds[i_base]
   }
 
+  # [RT-04] [RT-02]
   # Grid and base point for one continuous variable, computed once and
   # reused, so the factors, the intercept and the interaction grids all
   # agree on where the base sits.
@@ -425,6 +444,7 @@ make_rating_table <- function(model_freq = NULL,
     out
   }
 
+  # [RT-05]
   # Which grid point does each policy belong to? Categorical: its level.
   # Continuous: the nearest grid value, splitting on the midpoints between
   # them, the same rule the main-effect exposure histogram uses. Returns
@@ -460,6 +480,7 @@ make_rating_table <- function(model_freq = NULL,
   if (!length(uniq_bases))
     stop("make_rating_table: no usable variables found.")
 
+  # [MV-09]
   # A merge declaration that matches no term is as silent a mistake as a
   # misspelled grid step: the two blocks stay, and nothing says why.
   if (length(merge_map)) {
@@ -473,6 +494,7 @@ make_rating_table <- function(model_freq = NULL,
               "so the declaration changes nothing.", call. = FALSE)
   }
 
+  # [MV-08]
   # The same situation left undeclared. Worth one line, because the table
   # is then right but reads as two tariff fields where there is one, and
   # whoever builds the tariff from it has to know they belong together.
@@ -509,6 +531,7 @@ make_rating_table <- function(model_freq = NULL,
               ".", call. = FALSE)
   }
 
+  # [RT-02] [MV-09]
   # A chosen base per variable. Checked up front, because a wrong one does
   # not fail later: it silently moves every factor of that variable.
   if (!is.null(base)) {
@@ -560,6 +583,7 @@ make_rating_table <- function(model_freq = NULL,
     if (!length(base)) base <- NULL
   }
 
+  # [RT-04]
   # A misspelled name in grid_step would otherwise be ignored in silence,
   # leaving the user convinced they had set a step they had not
   if (!is.null(grid_step) && !is.null(names(grid_step))) {
@@ -576,6 +600,7 @@ make_rating_table <- function(model_freq = NULL,
               ".", call. = FALSE)
   }
 
+  # [RT-06]
   # Two-way interaction pairs (base variables) from both models, deduplicated
   gather_pairs <- function() {
     labs <- unique(c(if (!is.null(model_freq)) attr(terms(model_freq), "term.labels"),
@@ -597,6 +622,7 @@ make_rating_table <- function(model_freq = NULL,
     res
   }
 
+  # [CONV-04]
   # Build the rows per base variable ------------------------------------------
   rows <- lapply(uniq_bases, function(bv) tryCatch({
 
@@ -678,6 +704,7 @@ make_rating_table <- function(model_freq = NULL,
 
   out <- do.call(rbind, rows)
 
+  # [RT-06] [CONV-04]
   # Build the (two-way) interaction rows ---------------------------------------
   # Per pair: one variable becomes the X-axis, the other the "Group". The
   # factor is the joint relativity relative to the base cell (both at
@@ -773,6 +800,7 @@ make_rating_table <- function(model_freq = NULL,
   if (length(int_rows)) {
     out <- rbind(out, do.call(rbind, int_rows))
   } else {
+    # [RT-06]
     # An uplift only exists relative to the two main effects it sits
     # between, so on a tariff without a single interaction term these three
     # columns are NA in every row. Drop them rather than ship a block of
@@ -783,6 +811,7 @@ make_rating_table <- function(model_freq = NULL,
                                        "Uplift_Premium")), drop = FALSE]
   }
 
+  # [RT-07]
   # Thin-cell flag -------------------------------------------------------------
   # Levels backed by very few claims: the GLM applies no shrinkage to a
   # categorical level, so its factor comes essentially from those few
@@ -800,6 +829,7 @@ make_rating_table <- function(model_freq = NULL,
             "rest on very little experience (see the IsThin column).",
             call. = FALSE)
 
+  # [OFF-06] [RT-01] [RT-03]
   # Intercepts (base values on the response scale, exposure = 1) ---------------
   # The factors are ratios of two predictions that share the same base row,
   # so whatever the offset contributes cancels there. The intercept is the

@@ -53,6 +53,7 @@ plotly mode bar.
 - [Demo and figures](#demo-and-figures)
 - [Known limitations](#known-limitations)
 - [Appendix: full function specification](#appendix-full-function-specification)
+- [Technical documentation](TECHNICAL.md): every assumption and design decision, why it was made, and where it lives in the code
   (arguments, algorithm, return structure, assumptions and cost, per function)
 
 ---
@@ -2150,6 +2151,33 @@ $$\hat\mu_{\text{rate}} = g^{-1}\big(\hat\eta - \text{offset}\big)$$
 
 which is exact for **any** link and **any** offset expression. No family
 is a special case and none is unsupported.
+
+**Which part of the offset is taken out depends on what the number is
+compared with.** A model may carry more than one offset, typically the
+exposure and a known bonus-malus scale,
+`offset(log(Exposure)) + offset(log(BM_KORTING))`. The exposure says how
+long a policy was on risk; the BM says how much it pays. So the package
+subtracts either the whole offset or only its exposure part:
+
+| Function | Offset taken out | So the number is | Why |
+|---|---|---|---|
+| `make_rating_table()` (intercept), `make_pdp()` | **all** of it | per unit of exposure, at BM = 1 | a tariff table describes a base policy; the discount is applied on top, per policy |
+| `premium_impact()`, `model_lift()`, `double_lift()` | **only the exposure** (default `keep_offsets = TRUE`) | per unit of exposure, at the policy's own BM | they compare with something that includes the discount: the premium a customer pays, the claims that actually happened |
+
+The second row is $g^{-1}(\hat\eta - \text{offset}_{\text{exposure}})$: only
+the offset terms that mention `exposure_col` are subtracted. Taking the BM
+out there as well put every policy at the class without discount, and a
+correct model with an in-sample A/E of exactly 1.000 then read 0.800 on a
+book with an average discount of 20%. `keep_offsets = FALSE` restores
+taking everything out. Two cases fall back to it automatically: a model
+whose offset is not on `exposure_col` at all, and one expression holding
+both, `offset(log(Exposure * BM))`, which cannot be split and says so in a
+warning.
+
+`plot_glm_predictor()` does not remove anything: it compares the model's
+own fitted values with the observed response, both including every
+offset, and only divides by `exposure_col` to put the axis in claims per
+policy-year.
 
 That is worth spelling out because the obvious shortcut, set the exposure
 column to 1 so `log(1) = 0`, silently is not. It neutralises exactly one

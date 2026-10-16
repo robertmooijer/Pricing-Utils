@@ -77,6 +77,7 @@ pricing_report <- function(model_freq = NULL, model_sev = NULL, data,
 
   h      <- htmltools::tags
   anchor <- function(v) gsub("[^A-Za-z0-9_-]", "_", v)
+  # [CONV-04] [REP-02]
   safe   <- function(expr) tryCatch(expr, error = function(e)
     h$p(class = "ta-error", paste("Could not render:", conditionMessage(e))))
 
@@ -124,6 +125,7 @@ pricing_report <- function(model_freq = NULL, model_sev = NULL, data,
     .ta-toc a{color:#0073AB;text-decoration:none;margin-right:14px;}
   "))
 
+  # [REP-01]
   # Rating table (once; feeds the per-variable and interaction plots)
   tbl <- NULL
   if ("rating" %in% include) {
@@ -178,6 +180,7 @@ pricing_report <- function(model_freq = NULL, model_sev = NULL, data,
       parts <- c(parts, list(
         h$h3("One-way observed \u2013 frequency"),
         oneway("Frequency", ta_blue)))
+    # [REP-02]
     # Severity only alongside a severity model, the way the ae and pdp
     # blocks gate theirs: on a frequency-only tariff there is nothing to
     # read the observed severity against, and it doubles the heaviest
