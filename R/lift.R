@@ -102,6 +102,7 @@ model_lift <- function(model_freq = NULL, model_sev = NULL, data = NULL,
 
   if (is.null(model_freq) && is.null(model_sev))
     stop("model_lift: provide at least one model.", call. = FALSE)
+  .check_models("model_lift", model_freq = model_freq, model_sev = model_sev)
   if (!is.logical(keep_offsets) || length(keep_offsets) != 1 ||
       is.na(keep_offsets))
     stop("model_lift: 'keep_offsets' must be TRUE or FALSE.", call. = FALSE)
@@ -369,6 +370,9 @@ double_lift <- function(data,
                         n_boot = 200, conf_level = 0.90, seed = NULL,
                         at = NULL) {
 
+  .check_models("double_lift", model_freq_new = model_freq_new,
+                model_sev_new = model_sev_new, model_freq_old = model_freq_old,
+                model_sev_old = model_sev_old)
   old_premium_basis <- match.arg(old_premium_basis)
   if (!is.logical(keep_offsets) || length(keep_offsets) != 1 ||
       is.na(keep_offsets))

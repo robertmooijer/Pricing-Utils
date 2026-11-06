@@ -174,6 +174,8 @@ make_rating_table <- function(model_freq = NULL,
   if (is.null(model_freq) && is.null(model_sev)) {
     stop("Provide at least one model.")
   }
+  .check_models("make_rating_table", model_freq = model_freq,
+                model_sev = model_sev)
   .check_cols(data, c(exposure_col, claims_col), "make_rating_table")
   data <- .as_df(data)
   if (length(trim) != 2 || any(trim < 0) || any(trim > 1) || trim[1] >= trim[2])
@@ -225,7 +227,13 @@ make_rating_table <- function(model_freq = NULL,
 
   d_dt <- data.table::as.data.table(data)
 
-  var_is_cat <- function(bv) !is.null(xlev_all[[bv]]) || is.factor(data[[bv]])
+  # [RT-14] A logical column is a two-level rating factor, FALSE first as in
+  # the model (R codes it as GARAGETRUE against FALSE). glm() keeps no
+  # xlevels for it, and without this it was read as continuous: its base
+  # became the most frequent value rather than the model's reference, the
+  # export wrote its levels as numbers and the rating plot drew a line.
+  var_is_cat <- function(bv) !is.null(xlev_all[[bv]]) || is.factor(data[[bv]]) ||
+    is.logical(data[[bv]])
   var_levels <- function(bv) {
     if (!is.null(xlev_all[[bv]])) xlev_all[[bv]] else levels(factor(data[[bv]]))
   }

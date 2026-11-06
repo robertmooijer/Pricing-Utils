@@ -1220,7 +1220,12 @@ Error: the value(s) 1 of 'Stedelijkheid' do not occur in the data the
 ```
 
 A level with no claims has no severity factor either way, so the fix is in
-the model: group it with a level that does have claims.
+the model: group it with a level that does have claims. Putting
+`Stedelijkheid_groep` in `data` yourself, as the message says, also works:
+your value is kept for the level the model's data cannot check, and the
+level gets an empty severity cell with a warning, as any level the severity
+model was not fitted on does. Values the model's data does hold are still
+checked against it.
 
 ##### 7. Two groupings, one column name
 
@@ -1282,25 +1287,39 @@ and both groupings land in one block, on the real ages.
 ##### 8. What else is refused
 
 The relation has to be a function of the variable: every value maps to
-exactly one group. That is checked against `data`, so a column that is not
-a regrouping is refused instead of half applied.
+exactly one group. That is checked, so a column that is not a regrouping is
+refused instead of half applied. When a model uses the column, the check
+runs against the data that model was fitted on:
 
 ```r
 make_rating_table(m_freq, m_sev, data = dat,
                   merge_vars = list(Stedelijkheid = "LEEFTIJD"))
-#> Error: 'LEEFTIJD' is not a regrouping of 'Stedelijkheid': the value(s)
-#>        2, 3, 4, 1, 5 of 'Stedelijkheid' occur with more than one value of
-#>        'LEEFTIJD', so no single factor belongs to them.
+#> Error: make_rating_table: 'LEEFTIJD' is not a regrouping of 'Stedelijkheid'
+#>        in the data the frequency model was fitted on: the value(s)
+#>        2, 3, 4, 1, 5 occur there with more than one group.
 
 make_rating_table(m_freq, m_sev, data = dat,
                   merge_vars = list(Stedelijkheid = "Stedelijkheid_groep"),
                   base = list(Stedelijkheid_groep = "4-5"))
-#> Error: 'Stedelijkheid_groep' is merged into 'Stedelijkheid'; set the base
-#>        on that variable instead.
+#> Error: make_rating_table: 'Stedelijkheid_groep' is merged into
+#>        'Stedelijkheid'; set the base on that variable instead.
 ```
 
 A declaration that neither model uses raises a warning rather than
-changing nothing in silence, and so does a column that does not exist.
+changing nothing in silence, and a column that is in neither `data` nor a
+model is an error:
+
+```r
+make_rating_table(m_freq, m_sev, data = dat,
+                  merge_vars = list(MERK = "MERK_GR_F"))
+#> Warning: make_rating_table: 'merge_vars' mentions MERK_GR_F, which neither
+#>          model uses, so the declaration changes nothing.
+
+make_rating_table(m_freq, m_sev, data = dat,
+                  merge_vars = list(MERK = "MERK_KLASSE"))
+#> Error: make_rating_table: 'MERK_KLASSE' is not a column of 'data' and no
+#>        model uses it, so there is nothing to merge.
+```
 
 ##### 9. The export
 
@@ -1501,7 +1520,8 @@ Inline formula transformations such as `factor(YEAR)` and `ns(AGE, 4)` are
 resolved to their underlying columns; terms whose base variable cannot be
 found in `data` are skipped with a warning rather than crashing the call. A
 term that bands a column, such as `cut(LEEFTIJD, c(17, 24, 40, 65, 99))`,
-is reported on its bands, and a logical column on `TRUE` and `FALSE`.
+is reported on its bands, and a logical column as a categorical variable
+with the levels `FALSE` and `TRUE`, `FALSE` as base (the model's reference).
 
 The rows for one categorical variable look like this (base row highlighted,
 thin row greyed out, as in the Excel export). Note the last level: 5 claims
@@ -2561,7 +2581,8 @@ catches the low-exposure case.
 The functions fail fast with explicit messages rather than producing
 silently wrong numbers:
 
-- **Errors**: missing columns (named per function), non-glm model objects,
+- **Errors**: missing columns (named per function), non-glm model objects
+  (named by their argument, in every function that takes a model),
   models fitted without `data =` where training data is needed and cannot
   be found through the call, unknown `weight_var`, unmatched predictors,
   invalid `trim`; a level or year a model was not fitted on, named with
@@ -3603,7 +3624,8 @@ the base cell, then derive the uplift `joint / (mainₓ · main_g)`.
 
 A term whose levels are not values of its column, such as `cut(AGE, ...)`,
 is predicted on the most frequent value of the column within each band, and
-its volumes are counted on the evaluated term. A logical column stays
+its volumes are counted on the evaluated term. A logical column is a
+two-level categorical variable, `FALSE` first, and goes into `predict()` as
 logical. A level a model was not fitted on is predicted as `NA` for that
 model only, so the variable keeps its row; the base row itself must be
 known to every model, and is checked first.
@@ -3665,7 +3687,8 @@ a function of the source, or when two models define it differently. Decide
 from the models whether the source is categorical (exact lookup) or
 continuous (the band of the nearest value in the model's data), then fill
 the column. A column already in `data` is compared row by row instead of
-written.
+written; a source value the model's data does not hold cannot be compared,
+and keeps the value in `data`.
 
 **Returns.** `data` with the grouped columns added, each with the type and
 factor levels it has in the model's data. A data.table comes back as a

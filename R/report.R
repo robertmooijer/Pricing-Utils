@@ -66,6 +66,7 @@ pricing_report <- function(model_freq = NULL, model_sev = NULL, data,
   base_level <- match.arg(base_level)
   if (is.null(model_freq) && is.null(model_sev))
     stop("Provide at least one model.")
+  .check_models("pricing_report", model_freq = model_freq, model_sev = model_sev)
   .check_cols(data, c(exposure_col, claims_col, loss_col,
                       if (by_year) year_col), "pricing_report")
 

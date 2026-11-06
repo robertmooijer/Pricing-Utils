@@ -124,6 +124,26 @@ test_that("anything that would be a guess is refused", {
                "no model uses it")
 })
 
+test_that("a grouped column already in data is kept for a value the model never saw", {
+  # [MV-05] The error for an unknown source value tells the caller to put
+  # the grouped column in 'data' themselves, so doing that has to work. The
+  # value is then the caller's responsibility; predict() names it if the
+  # model cannot price it.
+  b <- new_pf(); b$MERK[3] <- "TESLA"
+  b$MERK_GR_F <- c("BMW_MERCEDES", "BMW_MERCEDES", "TESLA", "TOYOTA",
+                   "BMW_MERCEDES")
+  out <- add_groupings(b, g_freq, NULL, merge_vars = list(MERK = "MERK_GR_F"))
+  expect_identical(as.character(out$MERK_GR_F), b$MERK_GR_F)
+  # a value the model's data does know is still checked
+  b$MERK_GR_F[1] <- "NISSAN"
+  expect_error(add_groupings(b, g_freq, NULL, merge_vars = list(MERK = "MERK_GR_F")),
+               "row 1 has 'MERK' = BMW")
+  # and without the column the unknown value is still an error
+  b$MERK_GR_F <- NULL
+  expect_error(add_groupings(b, g_freq, NULL, merge_vars = list(MERK = "MERK_GR_F")),
+               "TESLA of 'MERK' do not occur in the data the frequency")
+})
+
 test_that("one name grouped two ways by the two models is refused", {
   f2 <- dg; f2$MG <- factor(ifelse(f2$MERK %in% c("BMW", "MERCEDES"), "G1", "G2"))
   s2 <- dg[dg$AantalClaims > 0, ]

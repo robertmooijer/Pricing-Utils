@@ -116,6 +116,9 @@ premium_impact <- function(data,
                            at           = NULL,
                            year_col     = "BOEKJAAR") {
 
+  .check_models("premium_impact", model_freq_new = model_freq_new,
+                model_sev_new = model_sev_new, model_freq_old = model_freq_old,
+                model_sev_old = model_sev_old)
   old_premium_basis <- match.arg(old_premium_basis)
   if (!is.logical(keep_offsets) || length(keep_offsets) != 1 ||
       is.na(keep_offsets))

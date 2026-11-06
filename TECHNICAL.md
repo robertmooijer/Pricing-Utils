@@ -134,6 +134,7 @@ All in `R/utils-internal.R` unless stated otherwise.
 | Helper | Purpose | Called from |
 |---|---|---|
 | `.check_cols(d, cols, fn)` | stop with a named message when columns are missing | most exported functions |
+| `.check_models(fn, ...)` | stop when a model argument is not a glm, naming the argument | `make_rating_table()`, `model_lift()`, `double_lift()`, `premium_impact()`, `pricing_report()` |
 | `.as_df(x)` | normalise data.table and tibble to a plain data.frame | most exported functions |
 | `.model_data(model)` | the data a model was fitted on: `model$data`, or the call's `data` evaluated where the formula was written | `.glm_training_data()`, `.source_kind()`, `.grouping_column()`, `pricing_report()` |
 | `.as_na_omit(model)` | read a model fitted with `na.exclude` as if fitted with `na.omit` | every function that mixes residuals or fitted values with the model frame |
@@ -244,7 +245,10 @@ the warning always names it.
 expressions, prior weights, factor levels and the training data are all
 taken from the fitted object (`family()`, `terms()`, `model$call`,
 `model$prior.weights`, `model$xlevels`, `model$data`). Several functions
-therefore need a model fitted with a `data =` argument, and say so.
+therefore need a model fitted with a `data =` argument, and say so. Every
+function that takes a model first checks that it is a glm and names the
+argument that is not (the plot and diagnostic functions inline,
+`.check_models()` in the others).
 
 **CONV-06 ASCII-only source.** All R files are ASCII; non-ASCII characters
 in messages and plot titles are written as `\uXXXX` escapes. Required for a
@@ -646,15 +650,28 @@ dashes. Each register entry here is written so it can be read on its own.
 - **Pinned by.** `test-review-findings.R`: "claims without payment are
   pointed out".
 
-#### RT-14 A logical predictor stays logical
+#### RT-14 A logical predictor is a two-level categorical variable
 
-- **Decision.** Grid values for a logical column are coerced back to
-  `TRUE` / `FALSE`.
-- **Why.** `predict()` refuses a character where the model was fitted on a
-  logical, so a column such as `GARAGE = TRUE` broke the table.
-- **Where.** `R/utils-internal.R`, `.coerce_like()`.
+- **Decision.** A logical column is reported as a categorical variable
+  with the levels `FALSE` and `TRUE`, `FALSE` first, so it is the base by
+  default (`base_level = "exposure"` and `base` choose as for any factor).
+  Its grid values go into `predict()` as `TRUE` / `FALSE`.
+- **Why.** `glm()` codes a logical as `GARAGETRUE` against `FALSE`, so
+  `FALSE` is the model's reference. `glm()` keeps no `xlevels` for a
+  logical, and reading the column as continuous made the base the most
+  frequent value instead, wrote the levels to Excel as numbers (empty
+  cells) and drew the rating plot as a line between FALSE and TRUE.
+  `predict()` refuses a character where the model was fitted on a logical,
+  hence the coercion.
+- **Where.** `R/rating-table.R`, `var_is_cat()`; `R/utils-internal.R`,
+  `.coerce_like()`.
 - **Pinned by.** `test-review-findings.R`: "a logical predictor does not
-  break the table".
+  break the table", "a logical predictor is a two-level rating factor with
+  FALSE as base".
+- **History.** Until November 2026 a logical was read as continuous. The
+  factors were right, but with `TRUE` as the more frequent value the base
+  row was `TRUE`, so the factors were relative to `TRUE` and not to the
+  model's reference. Found while porting the package to Python.
 
 #### RT-15 The accounting year sits at its latest level
 
@@ -760,11 +777,22 @@ dashes. Each register entry here is written so it can be read on its own.
 
 - **Decision.** If the data has the grouped column, every row is compared
   with what the model's data says, and a disagreement is an error with the
-  row and the values.
+  row and the values. A source value the model's data does not hold (a
+  brand without claims) cannot be compared, and keeps the value in `data`.
 - **Why.** A wrong mapping in a source system would otherwise be scored.
+  For a value the model's data does not hold, the error without the column
+  tells the caller to put the column in `data` themselves, so doing that
+  has to work; the value is then the caller's responsibility, and the
+  severity cell of such a level is empty (RT-10).
 - **Where.** `R/utils-internal.R`, `.grouping_column()`.
 - **Pinned by.** `test-groupings.R`: "anything that would be a guess is
-  refused".
+  refused", "a grouped column already in data is kept for a value the
+  model never saw"; `test-rating-table.R`: "a grouped column in data keeps
+  its value for a level the model never saw".
+- **History.** Until November 2026 an unknown source value was an error
+  even with the grouped column in `data`, so the remedy the message gave
+  did not work. Found while porting the package to Python, which had it
+  right first.
 
 #### MV-06 Categorical or continuous source
 

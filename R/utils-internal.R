@@ -154,6 +154,21 @@
   as.numeric(rng)
 }
 
+# Every model given must be a glm, as the plot and diagnostic functions
+# already require. Without the check the rating table, lift, impact and
+# report functions failed on the first component they read ("$ operator is
+# invalid for atomic vectors"), which does not say what is wrong.
+.check_models <- function(fn, ...) {
+  ms <- list(...)
+  for (nm in names(ms)) {
+    m <- ms[[nm]]
+    if (!is.null(m) && !inherits(m, "glm"))
+      stop(fn, ": '", nm, "' must be a glm object, not ", class(m)[1], ".",
+           call. = FALSE)
+  }
+  invisible(NULL)
+}
+
 # [RT-14]
 # Coerce values to the type of an existing column, so that inline
 # transformations in the formula (e.g. factor(YEAR) on a numeric column)
@@ -974,7 +989,10 @@
   } else {
     vals <- unname(map[as.character(x)])
     miss <- unique(as.character(x)[is.na(vals) & !is.na(x)])
-    if (length(miss))
+    # [MV-05] A grouped column the caller put in 'data' keeps its value where
+    # the model's data cannot check it: that is the remedy the message below
+    # gives, so it has to work. Only without the column is it an error.
+    if (length(miss) && !have)
       stop(fn, ": the value(s) ", paste(utils::head(miss, 5), collapse = ", "),
            if (length(miss) > 5) paste0(" and ", length(miss) - 5, " more"),
            " of '", pv, "' do not occur in the data the ", owner_nm,
@@ -997,7 +1015,9 @@
   if (!have) return(vals)
   # [MV-05]
   # Already there: checked, not overwritten. A column that disagrees with
-  # the model would have that model scored on a grouping it never saw.
+  # the model would have that model scored on a grouping it never saw. A
+  # source value the model's data does not hold cannot be checked, and
+  # keeps the caller's value.
   cur <- as.character(data[[a]])
   bad <- which(!is.na(cur) & !is.na(vals) & cur != as.character(vals))
   if (length(bad))

@@ -96,6 +96,61 @@ test_that("a logical predictor does not break the table", {
   expect_setequal(tb$Level[tb$Variable == "GARAGE"], c("FALSE", "TRUE"))
 })
 
+test_that("a model that is not a glm is refused by name", {
+  # the rating table, lift, impact and report functions failed on the first
+  # component they read, with an error that did not say what was wrong
+  mf <- glm(AantalClaims ~ REGIO + offset(log(Exposure)), poisson(), rv)
+  expect_error(make_rating_table(mf, "a model", data = rv),
+               "'model_sev' must be a glm object, not character")
+  expect_error(model_lift(list(coef = 1), NULL, data = rv),
+               "'model_freq' must be a glm object, not list")
+  expect_error(premium_impact(rv, model_freq_new = mf, model_freq_old = 42),
+               "'model_freq_old' must be a glm object, not numeric")
+  expect_error(double_lift(rv, model_freq_new = mf, model_sev_old = lm(1 ~ 1)),
+               "'model_sev_old' must be a glm object, not lm")
+  expect_error(pricing_report(mf, "x", data = rv, file = tempfile()),
+               "'model_sev' must be a glm object")
+})
+
+test_that("a logical predictor is a two-level rating factor with FALSE as base", {
+  # [RT-14] It used to be read as continuous: the base was the most frequent
+  # value rather than the model's reference, the export wrote the levels as
+  # numbers and the rating plot drew a line between FALSE and TRUE.
+  d1 <- rv; d1$GARAGE <- d1$LEEFTIJD %% 3 != 0        # TRUE is the majority
+  mf <- glm(AantalClaims ~ REGIO + GARAGE + offset(log(Exposure)),
+            family = poisson(), data = d1)
+  tb <- make_rating_table(mf, NULL, data = d1)
+  g <- tb[tb$Variable == "GARAGE", ]
+  expect_identical(g$Type, c("categorical", "categorical"))
+  expect_identical(g$Level, c("FALSE", "TRUE"))
+  expect_identical(g$Level[g$IsBase], "FALSE")
+  expect_equal(g$Factor_Frequency[g$Level == "TRUE"],
+               exp(unname(coef(mf)["GARAGETRUE"])), tolerance = 1e-10)
+  # the largest level under base_level = "exposure", or any chosen one
+  tx <- make_rating_table(mf, NULL, data = d1, base_level = "exposure")
+  expect_identical(tx$Level[tx$Variable == "GARAGE" & tx$IsBase], "TRUE")
+  tb2 <- make_rating_table(mf, NULL, data = d1, base = list(GARAGE = TRUE))
+  expect_identical(tb2$Level[tb2$Variable == "GARAGE" & tb2$IsBase], "TRUE")
+  expect_error(make_rating_table(mf, NULL, data = d1, base = list(GARAGE = "ja")),
+               "not a level of 'GARAGE'")
+  # the premium rebuilds from the table
+  nd <- data.frame(REGIO = factor("West", levels(d1$REGIO)), GARAGE = TRUE,
+                   Exposure = 1)
+  f <- function(v, l) tb$Factor_Frequency[tb$Variable == v & tb$Level == l]
+  expect_equal(attr(tb, "intercept_frequency") * f("REGIO", "West") *
+                 f("GARAGE", "TRUE"),
+               as.numeric(predict(mf, nd, type = "response")), tolerance = 1e-10)
+  # the rating plot draws bars, the export writes the levels as text
+  b <- plotly::plotly_build(make_rating_plot(tb, "GARAGE"))$x$data
+  expect_true("bar" %in% vapply(b, function(t) t$type, character(1)))
+  f_x <- tempfile(fileext = ".xlsx")
+  export_rating_table(tb, f_x)
+  # (read.xlsx turns a column of TRUE/FALSE text back into logicals; as
+  # numbers the levels came back empty)
+  expect_identical(as.character(openxlsx::read.xlsx(f_x, sheet = "GARAGE")$Level[1:2]),
+                   c("FALSE", "TRUE"))
+})
+
 test_that("na.exclude gives the same result as na.omit", {
   d1 <- rv; d1$GEWICHT[seq(1, nrow(d1), by = 50)] <- NA
   f <- AantalClaims ~ LEEFTIJD + REGIO + log(GEWICHT) + offset(log(Exposure))

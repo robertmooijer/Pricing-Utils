@@ -608,6 +608,56 @@ test_that("a regrouped column missing from 'data' is taken from the model", {
                "no model uses it")
 })
 
+test_that("a grouped column in data keeps its value for a level the model never saw", {
+  # [MV-05] The severity data has no claims at Stedelijkheid 1, so the
+  # model's data cannot say which group 1 belongs to. With the grouped
+  # column in 'data' the caller says it, and the level gets an empty
+  # severity cell (RT-10), as any level the severity model was not fitted
+  # on does. Without the column it stays an error.
+  set.seed(93)
+  nm <- 30000
+  dm <- data.frame(
+    Stedelijkheid = factor(sample(1:5, nm, TRUE)),
+    LEEFTIJD      = round(runif(nm, 18, 80)),
+    Exposure      = round(runif(nm, .3, 1), 3))
+  dm$Sted_groep <- factor(ifelse(dm$Stedelijkheid %in% c("4", "5"), "4-5",
+                                 as.character(dm$Stedelijkheid)))
+  dm$AantalClaims <- rpois(nm, dm$Exposure *
+    exp(-2.2 + .15 * as.numeric(as.character(dm$Stedelijkheid))))
+  dm$SCHADELAST <- ifelse(dm$AantalClaims > 0,
+    dm$AantalClaims * rgamma(nm, 3, scale = 600 *
+      ifelse(dm$Sted_groep == "4-5", 1.25, 1)), 0)
+  mf <- glm(AantalClaims ~ Stedelijkheid + LEEFTIJD + offset(log(Exposure)),
+            poisson(), dm)
+  ds <- dm[dm$AantalClaims > 0 & dm$Stedelijkheid != "1", ]
+  ds$AvgLoss <- ds$SCHADELAST / ds$AantalClaims
+  ds$Sted_groep <- droplevels(ds$Sted_groep)
+  ms <- glm(AvgLoss ~ Sted_groep, Gamma("log"), ds, weights = AantalClaims)
+  mv <- list(Stedelijkheid = "Sted_groep")
+
+  # (the base row has to be a level both models know, RT-10)
+  expect_error(make_rating_table(mf, ms, data = dm, merge_vars = mv),
+               "the base row has 'Sted_groep' = 1")
+  ws <- character(0)
+  tb <- withCallingHandlers(
+    make_rating_table(mf, ms, data = dm, merge_vars = mv,
+                      base = list(Stedelijkheid = "2")),
+    warning = function(w) {
+      ws <<- c(ws, conditionMessage(w)); invokeRestart("muffleWarning")
+    })
+  s <- tb[tb$Variable == "Stedelijkheid", ]
+  expect_equal(nrow(s), 5)
+  expect_true(is.na(s$Factor_Severity[s$Level == "1"]))
+  expect_true(is.finite(s$Factor_Frequency[s$Level == "1"]))
+  expect_true(is.finite(s$Factor_Severity[s$Level == "2"]))
+  expect_true(any(grepl("no severity factor for Stedelijkheid = 1", ws)))
+
+  dm2 <- dm; dm2$Sted_groep <- NULL
+  expect_error(make_rating_table(mf, ms, data = dm2, merge_vars = mv,
+                                 base = list(Stedelijkheid = "2")),
+               "do not occur in the data the severity")
+})
+
 test_that("a band missing from 'data' is derived per nearest observed value", {
   set.seed(98)
   nm <- 20000
