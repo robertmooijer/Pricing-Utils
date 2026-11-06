@@ -375,7 +375,9 @@ premium_impact <- function(data,
       legend       = list(orientation = "h", y = -0.2),
       showlegend   = !is.null(spotlight_res),
       plot_bgcolor = "white", paper_bgcolor = "white",
-      margin       = list(b = 60, r = 40)
+      # room above the plot for the median label, which otherwise runs
+      # into the title
+      margin       = list(t = 60, b = 60, r = 40)
     ) %>%
     config(displayModeBar = TRUE,
            modeBarButtonsToRemove = c("lasso2d", "select2d"),

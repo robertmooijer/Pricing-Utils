@@ -390,6 +390,9 @@ test_that("the double lift names a winner only when the interval excludes 0", {
   expect_gt(clear$stats$mad_diff_ci[1], 0)
   expect_equal(clear$stats$mad_diff,
                clear$stats$mad_old - clear$stats$mad_new)
+  # the interval lies around its own point value (RATE-11)
+  expect_lte(clear$stats$mad_diff_ci[1], clear$stats$mad_diff)
+  expect_gte(clear$stats$mad_diff_ci[2], clear$stats$mad_diff)
   # two models fitted on the same signal cannot be told apart; without
   # large losses behind it that is the verdict, not a warning
   expect_no_warning(close <- double_lift(dl, model_freq_new = m_good,
@@ -399,6 +402,8 @@ test_that("the double lift names a winner only when the interval excludes 0", {
   expect_identical(close$stats$winner, "inconclusive")
   expect_lte(close$stats$mad_diff_ci[1], 0)
   expect_gte(close$stats$mad_diff_ci[2], 0)
+  expect_lte(close$stats$mad_diff_ci[1], close$stats$mad_diff)
+  expect_gte(close$stats$mad_diff_ci[2], close$stats$mad_diff)
   # without the bootstrap the point values decide, as before
   pt <- double_lift(dl, model_freq_new = m_good, model_freq_old = m_reg,
                     actual_col = "AantalClaims", n_boot = 0)

@@ -1075,7 +1075,10 @@ dashes. Each register entry here is written so it can be read on its own.
   the large-sample stand-in for resampling with replacement, so the book is
   sorted once (`.gini_boot()`) or the bins are kept as cut on the full data
   and every replicate reweights the policies within them (rebased again
-  when `rebase = TRUE`). The interval is in the title and the return value.
+  when `rebase = TRUE`). The Gini interval is the percentile interval of
+  the replicates. The double-lift interval is their spread laid around the
+  point value: `mad_diff + quantile(sims - mean(sims), ...)`. The interval
+  is in the title and the return value.
   A warning is raised only when large losses are the reason: the ten
   largest records carry 10% or more of `actual_col` (`.large_loss_note()`)
   and, for the Gini, the interval is wider than half the Gini and than
@@ -1084,19 +1087,47 @@ dashes. Each register entry here is written so it can be read on its own.
   so does the double-lift verdict (RATE-09). Capping the losses is the
   remedy for that, and the warning says so. A wide interval on a small book
   has no such remedy; warning about it fired on an ordinary frequency lift
-  of 20,000 policies and was noise.
+  of 20,000 policies and was noise. `mean |A/E - 1|` grows with noise, and
+  more for the model whose A/E sits near 1, so every replicate is pulled
+  towards the old model: the percentile interval of `mad_old - mad_new`
+  sat below the point value, at times beside it entirely (0.110 with an
+  interval of 0.051 to 0.105). Laid around the point value, the spread
+  contains it by construction, and the verdict gains power without naming
+  the wrong model more often than the confidence level allows.
 - **Where.** `R/utils-internal.R`, `.gini_boot()`, `.gini_ordered()`,
   `.top_share()`, `.large_loss_note()`, `.check_boot()`; `R/lift.R`.
 - **Evidence.** The review's 16,000-policy holdout: Gini 0.230, 90%
   interval 0.143 to 0.326 (0.133 to 0.302 for the true risk premium), so
-  the model and the truth could not be told apart on it.
+  the model and the truth could not be told apart on it. The double-lift
+  interval, 300 simulated books per case, 200 replicates, 90%: the share
+  of books with the verdict in brackets.
+
+  | Case (true `mad_old - mad_new`) | percentile | around the point value | basic bootstrap |
+  |---|---|---|---|
+  | new right, old misses half a factor, 40k (+0.088) | new 95% | new 96% | new 97% |
+  | new right, old misses a sixth, 40k (+0.026) | new 18% | new 37% | new 51% |
+  | new right, old misses half, 10k (+0.091) | new 36% | new 52% | new 68% |
+  | two mirrored errors, 40k (-0.010) | wrong winner 1% | wrong winner 4% | wrong winner 7% |
+  | two mirrored errors, 10k (-0.010) | wrong winner 2% | wrong winner 8% | wrong winner 18% |
+  | old better, 40k (-0.018) | old 15% | old 21% | old 25% |
+
+  The basic bootstrap names the wrong model up to 18% of the time; the
+  percentile interval misses most real differences. The simulation is
+  `demo/double_lift_interval_coverage.py` in the Python package.
 - **Limitation.** The interval resamples policies only. The models are
   held fixed, so an in-sample interval ignores that they were fitted on
-  the same rows.
+  the same rows. And `mad_diff` itself is pulled the same way as the
+  replicates (the sample's own noise inflates the better model's
+  `|A/E - 1|`), so no interval around it covers the true difference at the
+  nominal rate: 52% to 87% in the cases above, against 90%.
 - **Pinned by.** `test-review-findings.R`: "model_lift reports a bootstrap
   interval around the Gini", "large losses that decide the Gini or the
   verdict are named", "the double lift names a winner only when the
-  interval excludes 0".
+  interval excludes 0" (which also checks that the interval contains its
+  point value).
+- **History.** Until November 2026 the double-lift interval was the
+  percentile interval of the replicates; the README figure of the Python
+  package showed it beside its own point value.
 
 #### RATE-12 The double-lift weight follows the models
 

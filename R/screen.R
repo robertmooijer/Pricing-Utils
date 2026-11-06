@@ -540,13 +540,18 @@ screen_features <- function(model, features = NULL,
 
   # Plot: one bar per candidate, muted where there is no signal ----------
   fp <- feat_df[order(feat_df$PermDeviance), ]
+  lab <- paste0("Gain: ", formatC(fp$Gain, format = "f", digits = 3),
+                ifelse(fp$InModel, " \u00b7 already in the model", ""))
+  # A bar at or below zero runs to the left, so a label outside it lands
+  # on the feature names; it is written to the right of the zero line
+  # instead, in the empty half of the row
+  neg <- !is.na(fp$PermDeviance) & fp$PermDeviance <= 0
   p <- plot_ly() %>%
     add_bars(
       x = fp$PermDeviance, y = factor(fp$Feature, levels = fp$Feature),
       orientation = "h",
       marker = list(color = ifelse(fp$PermDeviance > 0, ta_blue, ta_muted)),
-      text = paste0("Gain: ", formatC(fp$Gain, format = "f", digits = 3),
-                    ifelse(fp$InModel, " \u00b7 already in the model", "")),
+      text = lab, textposition = ifelse(neg, "none", "auto"),
       hovertemplate = paste0("<b>%{y}</b><br>PermDeviance: %{x:.2f}",
                              "<br>%{text}<extra></extra>")) %>%
     layout(
@@ -559,6 +564,10 @@ screen_features <- function(model, features = NULL,
                          x0 = 0, x1 = 0, y0 = 0, y1 = 1,
                          line = list(color = ta_muted, width = 1,
                                      dash = "dot"))),
+      annotations = lapply(which(neg), function(i)
+        list(x = 0, y = fp$Feature[i], xref = "x", yref = "y",
+             text = lab[i], xanchor = "left", xshift = 6, showarrow = FALSE,
+             font = list(color = ta_muted, size = 12))),
       hoverlabel = list(bgcolor = "white", font = list(size = 12)),
       plot_bgcolor = "white", paper_bgcolor = "white",
       margin = list(l = 140, b = 60, r = 40)) %>%

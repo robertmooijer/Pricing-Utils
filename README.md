@@ -568,7 +568,7 @@ term's uncertainty is because of overlap with the rest:
 
 ![Collinearity table](man/figures/README-collinearity.png)
 
-In this model two near-duplicate weight columns are flagged at 8.4, while
+In this model two near-duplicate weight columns are flagged at 8.3, while
 every independent term sits at 1.0.
 
 **The most important thing about this diagnostic:** collinearity damages
@@ -814,8 +814,8 @@ surfaces.
 `MaxAE_Claims`, `MaxAE_ExposureShare`.
 
 On the portfolio that is missing an age × region interaction, the true pair
-comes out at `Z = 33.9` against 1.6 for the runner-up, and its worst cell is
-27% mispriced on 3% of the exposure:
+comes out at `Z = 47.3`, and its worst cell is 26% mispriced on 4% of the
+exposure:
 
 ![Interaction scan](man/figures/README-detect-interactions.png)
 
@@ -835,7 +835,7 @@ plot_residual_heatmap(model, var_x, var_y, n_bins = 20,
 ```
 
 Below, a frequency GLM with clean main effects for age and region but no
-interaction between them. Young drivers in the city are underpriced by 27%
+interaction between them. Young drivers in the city are underpriced by 29%
 while the same age group elsewhere is overpriced, and every one-way check on
 this model is spotless:
 
@@ -1806,7 +1806,7 @@ And in `$stats`:
 | Value | What it tells you |
 |---|---|
 | `mad_new`, `mad_old` | average distance from 1.0 across the slices, lower is better calibrated |
-| `mad_diff`, `mad_diff_ci` | `mad_old - mad_new`, positive when the new tariff is closer to 1, and its bootstrap interval |
+| `mad_diff`, `mad_diff_ci` | `mad_old - mad_new`, positive when the new tariff is closer to 1, and its bootstrap interval: the spread of the replicates laid around the point value, which it therefore always contains |
 | `winner` | `"new"` or `"old"` only when that interval excludes 0; `"inconclusive"` when it does not; `"tie"` when the two are equal |
 | `rate_level_change` | how much more the new tariff collects overall, measured before any rebasing |
 | `weight_col` | what the slices hold equal amounts of |
@@ -3170,8 +3170,11 @@ amount divided by the weight. Rebase the new rates by `Σ(old·w) /
 weight, and per bin compute the A/E of each model. `mad_new` and `mad_old`
 are the mean absolute distance of those A/E series from 1.0. The bootstrap
 reweights the policies with Poisson(1) counts within the bins cut on the
-full data, rebasing each replicate again, and takes the `conf_level`
-quantiles of `mad_old - mad_new`. `winner` is `"tie"` when the two point
+full data, rebasing each replicate again, and lays the spread of the
+replicates around the point value: `mad_diff` plus the `conf_level`
+quantiles of the replicates minus their mean. (The replicates themselves
+sit low, because noise inflates `|A/E - 1|` most for the model nearest 1;
+their plain quantiles could lie beside the point value.) `winner` is `"tie"` when the two point
 values are equal, otherwise `"new"` or `"old"` when the interval excludes
 0 and `"inconclusive"` when it does not; with `n_boot = 0` the smaller
 point value wins.
